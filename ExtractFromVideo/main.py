@@ -15,7 +15,7 @@ def extract_frames(video_path, output_dir, frame_interval=30):
         if not ret:
             break
 
-        if frame_count % frame_interval == 0:
+        if frame_count % frame_interval == 0: # and frame_count > 5300:
             frame_filename = os.path.join(
                 output_dir, f"frame_{extracted_count:04d}.jpg"
             )
@@ -23,13 +23,12 @@ def extract_frames(video_path, output_dir, frame_interval=30):
             extracted_count += 1
 
         frame_count += 1
-
     cap.release()
     print(f"Extracted {extracted_count} frames from the video.")
 
 
 if __name__ == "__main__":
-    video_path = "data/Eiffel_Tower.m4v"
-    output_dir = "extracted_frames"
+    video_path = "data/2.mp4"  # Eiffel_Tower.m4v | 2.mp4
+    output_dir = "colmap_2/frames"
     frame_interval = 30  # Extract one frame every 30 frames
     extract_frames(video_path, output_dir, frame_interval)

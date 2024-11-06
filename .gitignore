@@ -166,3 +166,5 @@ data/
 temp/
 colmap/
 *.mkv
+colmap*/
+extracted_frames/

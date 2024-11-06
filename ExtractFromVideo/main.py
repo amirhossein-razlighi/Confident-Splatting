@@ -6,11 +6,11 @@ def extract_frames(video_path, output_dir, frame_interval=30):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    cap = cv2.VideoCapture(video_path)
     frame_count = 0
     extracted_count = 0
 
-    while cap.isOpened():
+    while cap.isOpened() and extracted_count <= 100:
         ret, frame = cap.read()
         if not ret:
             break
@@ -29,7 +29,7 @@ def extract_frames(video_path, output_dir, frame_interval=30):
 
 
 if __name__ == "__main__":
-    video_path = "data/Eiffel_Tower.mkv"
+    video_path = "data/Eiffel_Tower.m4v"
     output_dir = "extracted_frames"
     frame_interval = 30  # Extract one frame every 30 frames
     extract_frames(video_path, output_dir, frame_interval)

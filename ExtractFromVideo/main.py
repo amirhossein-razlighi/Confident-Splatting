@@ -1,34 +1,46 @@
 import cv2
-import os
+import numpy as np
+from pathlib import Path
 
 
-def extract_frames(video_path, output_dir, frame_interval=30):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
 
+def variance_of_laplacian(image):
+    # Measure image blur
+    return cv2.Laplacian(image, cv2.CV_64F).var()
+
+
+def extract_quality_frames(
+    video_path, output_dir, frame_interval=10, blur_threshold=100
+):
     cap = cv2.VideoCapture(video_path)
-    frame_count = 0
-    extracted_count = 0
+    Path(output_dir).mkdir(exist_ok=True)
 
-    while cap.isOpened() and extracted_count <= 100:
+    frame_count = 0
+    saved_count = 0
+
+    while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        if frame_count % frame_interval == 0: # and frame_count > 5300:
-            frame_filename = os.path.join(
-                output_dir, f"frame_{extracted_count:04d}.jpg"
-            )
-            cv2.imwrite(frame_filename, frame)
-            extracted_count += 1
+        if frame_count % frame_interval == 0:
+            # Check image quality
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            blur_score = variance_of_laplacian(gray)
+
+            if blur_score > blur_threshold:
+                # Save frame if it passes quality check
+                output_path = f"{output_dir}/frame_{saved_count:04d}.jpg"
+                cv2.imwrite(output_path, frame)
+                saved_count += 1
 
         frame_count += 1
+
     cap.release()
-    print(f"Extracted {extracted_count} frames from the video.")
+    print(f"Extracted {saved_count} quality frames")
 
 
-if __name__ == "__main__":
-    video_path = "data/2.mp4"  # Eiffel_Tower.m4v | 2.mp4
-    output_dir = "colmap_2/frames"
-    frame_interval = 30  # Extract one frame every 30 frames
-    extract_frames(video_path, output_dir, frame_interval)
+# Usage
+video_path = "Videos/Eiffel_Tower.m4v"
+output_dir = "frames_for_colmap"
+extract_quality_frames(video_path, output_dir, frame_interval=60, blur_threshold=100)

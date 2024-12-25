@@ -168,3 +168,6 @@ colmap/
 *.mkv
 colmap*/
 extracted_frames/
+*_Data/
+frames_*/
+Videos/

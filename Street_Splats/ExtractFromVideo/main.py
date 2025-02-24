@@ -43,4 +43,4 @@ def extract_quality_frames(
 # Usage
 video_path = "Videos/Eiffel_Tower.m4v"
 output_dir = "frames_for_colmap"
-extract_quality_frames(video_path, output_dir, frame_interval=60, blur_threshold=100)
+extract_quality_frames(video_path, output_dir, frame_interval=20, blur_threshold=100)

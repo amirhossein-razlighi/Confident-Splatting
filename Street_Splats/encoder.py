@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class SplatEncoder(nn.Module):
     def __init__(self, input_dim, latent_dim):
         super(SplatEncoder, self).__init__()
@@ -17,6 +18,7 @@ class SplatEncoder(nn.Module):
         logvar = self.fc_logvar(h)
         return mu, logvar
 
+
 class SplatDecoder(nn.Module):
     def __init__(self, latent_dim, output_dim):
         super(SplatDecoder, self).__init__()
@@ -29,6 +31,7 @@ class SplatDecoder(nn.Module):
         h = F.relu(self.fc2(h))
         reconstruction = self.fc_out(h)
         return reconstruction
+
 
 class SplatVAE(nn.Module):
     def __init__(self, input_dim, latent_dim, output_dim):
@@ -47,26 +50,10 @@ class SplatVAE(nn.Module):
         reconstruction = self.decoder(z)
         return reconstruction, mu, logvar
 
+
 def loss_function(recon_x, x, mu, logvar):
     # Reconstruction loss: mean squared error (or L1 loss)
-    recon_loss = F.mse_loss(recon_x, x, reduction='sum')
+    recon_loss = F.mse_loss(recon_x, x, reduction="sum")
     # KL divergence loss
     kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return recon_loss + kld_loss
-
-# Example usage:
-if __name__ == '__main__':
-    # Assume splats are flattened into a vector of size input_dim.
-    input_dim = 100  # adjust according to your splat parameters
-    latent_dim = 20  # tunable latent space size
-    output_dim = input_dim
-
-    vae = SplatVAE(input_dim, latent_dim, output_dim)
-    
-    # Dummy input representing a batch of splats
-    dummy_input = torch.randn(16, input_dim)
-    recon, mu, logvar = vae(dummy_input)
-    
-    loss = loss_function(recon, dummy_input, mu, logvar)
-    loss.backward()
-    print(f"Loss: {loss.item()}")

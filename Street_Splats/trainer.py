@@ -39,8 +39,10 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+
 # from gsplat.optimizers import SelectiveAdam
 os.environ["TORCH_CUDA_ARCH_LIST"] = "8.0 8.6+PTX 9.0+PTX 8.6 8.0 7.5"
+
 
 def compute_confidence_from_props(splats, k=10):
     """Compute a confidence score for each splat based on: - local density (from the splat means) - scale consistency (using exp(scales)) - opacity (via sigmoid(opacities)) All operations are GPU friendly."""
@@ -678,13 +680,13 @@ class Runner:
             # loss
             l1loss = F.l1_loss(colors, pixels)
             colors_p = colors.permute(0, 3, 1, 2)  # [B, 3, H, W]
-            pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W] 
+            pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W]
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             lambda_conf = 0.01
             conf_loss = lambda_conf * compute_confidence_loss(self.splats)
             loss = recon_loss + conf_loss
-            
+
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(

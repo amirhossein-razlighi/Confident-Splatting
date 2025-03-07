@@ -253,6 +253,12 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
+    # Whether to use confidence scores or not
+    use_conf_scores: bool = False
+
+    # The multiplier (lambda) for confidence scores
+    lambda_conf: float = 0.01
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -725,9 +731,12 @@ class Runner:
             pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W]
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            lambda_conf = 0.01
-            conf_loss = lambda_conf * compute_confidence_loss(self.splats)
-            loss = recon_loss + conf_loss
+            if cfg.use_conf_scores:
+                lambda_conf = cfg.lambda_conf
+                conf_loss = lambda_conf * compute_confidence_loss(self.splats)
+                loss = recon_loss + conf_loss
+            else:
+                loss = recon_loss
 
             if cfg.depth_loss:
                 # query depths from depth map

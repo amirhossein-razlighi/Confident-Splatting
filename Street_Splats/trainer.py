@@ -44,32 +44,63 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
 def compute_confidence_from_props(splats, k=10, batch_size=1000):
-    """Compute confidence scores with batched distance calculations to save memory."""
+    """Compute confidence scores using locality-sensitive hashing to approximate nearest neighbors."""
     means = splats["means"]  # shape [N, 3]
     scales = torch.exp(splats["scales"])  # shape [N, 3]
     opacities = torch.sigmoid(splats["opacities"])  # shape [N,]
     N = means.shape[0]
+    device = means.device
 
-    # 1. Density: Compute approximate local density in batches
-    local_density = torch.zeros(N, device=means.device)
+    # 1. Grid-based spatial partitioning
+    grid_size = 64  # Number of cells per dimension
+    grid_max = means.max(dim=0)[0]
+    grid_min = means.min(dim=0)[0]
+    grid_span = grid_max - grid_min
+
+    # Quantize points into grid cells
+    grid_coords = ((means - grid_min) / grid_span * grid_size).long()
+    grid_coords = grid_coords.clamp(0, grid_size - 1)
+
+    # Hash grid coordinates to cell indices
+    cell_hash = (
+        grid_coords[:, 0] * grid_size * grid_size
+        + grid_coords[:, 1] * grid_size
+        + grid_coords[:, 2]
+    )
+
+    # Sort points by cell hash for locality
+    sorted_idx = torch.argsort(cell_hash)
+    inv_idx = torch.zeros_like(sorted_idx)
+    inv_idx[sorted_idx] = torch.arange(N, device=device)
+
+    means = means[sorted_idx]
+    scales = scales[sorted_idx]
+    opacities = opacities[sorted_idx]
+    cell_hash = cell_hash[sorted_idx]
+
+    # 2. Process points in spatial chunks
+    local_density = torch.zeros(N, device=device)
+    window_size = min(batch_size * 2, 2048)  # Compute distances within sliding windows
 
     for i in range(0, N, batch_size):
         end_idx = min(i + batch_size, N)
-        batch_means = means[i:end_idx]
+        window_start = max(0, i - window_size // 2)
+        window_end = min(N, end_idx + window_size // 2)
 
-        # Compute distances between this batch and all points
-        batch_dists = torch.cdist(batch_means, means, p=2)  # [batch_size, N]
+        # Compute distances only within the window
+        curr_means = means[i:end_idx]
+        window_means = means[window_start:window_end]
 
-        # Mask out self-distances
-        batch_mask = (
-            torch.arange(i, end_idx, device=means.device)[:, None]
-            == torch.arange(N, device=means.device)[None, :]
-        )
-        batch_dists = batch_dists.masked_fill(batch_mask, float("inf"))
+        dists = torch.cdist(curr_means, window_means)  # [batch_size, window_size]
 
-        # Get k nearest neighbors
-        k_smallest, _ = torch.topk(batch_dists, k=k, largest=False)  # [batch_size, k]
+        # Get k nearest neighbors within window
+        k_smallest, _ = torch.topk(dists, k=min(k, dists.size(1)), largest=False)
         local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
+
+    # Unsort the results
+    local_density = local_density[inv_idx]
+    scales = scales[inv_idx]
+    opacities = opacities[inv_idx]
 
     # Normalize density to [0, 1]
     density_norm = (local_density - local_density.min()) / (

@@ -248,6 +248,9 @@ class Config:
 
     # The multiplier (lambda) for confidence scores
     lambda_conf: float = 0.01
+    
+    # The interval of which the confidence score gets updated
+    conf_update_interval: int = 1
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -421,6 +424,9 @@ class Runner:
             world_size=world_size,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
+        
+        if cfg.use_conf_scores:
+            print(f"Using Confidence-based method with lambda = {cfg.lambda_conf}")
 
         # Densification Strategy
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
@@ -721,10 +727,10 @@ class Runner:
             pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W]
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            if cfg.use_conf_scores and step % conf_update_interval == 0:
+            if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
                 lambda_conf = cfg.lambda_conf
-                conf_loss = lambda_conf * compute_confidence_loss(self.splats)
-                loss = recon_loss + conf_loss
+                conf_loss = compute_confidence_loss(self.splats)
+                loss = (1 - lambda_conf) * recon_loss + lambda_conf * conf_loss
             else:
                 loss = recon_loss
 

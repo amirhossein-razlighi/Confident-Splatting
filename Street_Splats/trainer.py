@@ -43,83 +43,73 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 # from gsplat.optimizers import SelectiveAdam
 
 
-def compute_confidence_from_props(splats, k=10, batch_size=1000):
-    """Compute confidence scores using locality-sensitive hashing to approximate nearest neighbors."""
-    means = splats["means"]  # shape [N, 3]
-    scales = torch.exp(splats["scales"])  # shape [N, 3]
-    opacities = torch.sigmoid(splats["opacities"])  # shape [N,]
+def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1024):
+    """Compute confidence on a random subset of points
+
+    Args:
+        splats: Dictionary containing gaussian parameters
+        sample_size: Number of points to sample for confidence computation
+        k: Number of nearest neighbors for density estimation
+        batch_size: Batch size for processing chunks of points
+    """
+    means = splats["means"]
     N = means.shape[0]
     device = means.device
 
-    # 1. Grid-based spatial partitioning
-    grid_size = 64  # Number of cells per dimension
-    grid_max = means.max(dim=0)[0]
-    grid_min = means.min(dim=0)[0]
-    grid_span = grid_max - grid_min
+    # Randomly sample points if N is too large
+    if N > sample_size:
+        idx = torch.randperm(N, device=device)[:sample_size]
+        means = means[idx]
+        scales = torch.exp(splats["scales"][idx])
+        opacities = torch.sigmoid(splats["opacities"][idx])
+        N = sample_size
+    else:
+        scales = torch.exp(splats["scales"])
+        opacities = torch.sigmoid(splats["opacities"])
 
-    # Quantize points into grid cells
-    grid_coords = ((means - grid_min) / grid_span * grid_size).long()
-    grid_coords = grid_coords.clamp(0, grid_size - 1)
-
-    # Hash grid coordinates to cell indices
-    cell_hash = (
-        grid_coords[:, 0] * grid_size * grid_size
-        + grid_coords[:, 1] * grid_size
-        + grid_coords[:, 2]
-    )
-
-    # Sort points by cell hash for locality
-    sorted_idx = torch.argsort(cell_hash)
-    inv_idx = torch.zeros_like(sorted_idx)
-    inv_idx[sorted_idx] = torch.arange(N, device=device)
-
-    means = means[sorted_idx]
-    scales = scales[sorted_idx]
-    opacities = opacities[sorted_idx]
-    cell_hash = cell_hash[sorted_idx]
-
-    # 2. Process points in spatial chunks
+    # Compute local density using batched processing
     local_density = torch.zeros(N, device=device)
-    window_size = min(batch_size * 2, 2048)  # Compute distances within sliding windows
 
     for i in range(0, N, batch_size):
         end_idx = min(i + batch_size, N)
-        window_start = max(0, i - window_size // 2)
-        window_end = min(N, end_idx + window_size // 2)
-
-        # Compute distances only within the window
         curr_means = means[i:end_idx]
-        window_means = means[window_start:window_end]
 
-        dists = torch.cdist(curr_means, window_means)  # [batch_size, window_size]
+        # Compute distances to all other points
+        dists = torch.cdist(curr_means, means)  # [batch, N]
 
-        # Get k nearest neighbors within window
-        k_smallest, _ = torch.topk(dists, k=min(k, dists.size(1)), largest=False)
+        # Get k nearest neighbors (excluding self)
+        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)  # Include self
+        k_smallest = k_smallest[:, 1:]  # Exclude self
+
+        # Compute density as inverse of mean distance
         local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
-
-    # Unsort the results
-    local_density = local_density[inv_idx]
-    scales = scales[inv_idx]
-    opacities = opacities[inv_idx]
 
     # Normalize density to [0, 1]
     density_norm = (local_density - local_density.min()) / (
         local_density.max() - local_density.min() + 1e-6
     )
 
-    # 2. Scale consistency
+    # Scale consistency
     scale_std = scales.std(dim=1)  # [N,]
     scale_conf = 1.0 / (scale_std + 1e-6)
     scale_conf = (scale_conf - scale_conf.min()) / (
         scale_conf.max() - scale_conf.min() + 1e-6
     )
 
-    # 3. Opacity confidence
-    opacity_conf = opacities  # already in [0,1]
+    # Opacity confidence (already in [0,1])
+    opacity_conf = opacities
 
-    # Combine factors
+    # Combine factors with weights
     conf = 0.4 * density_norm + 0.3 * scale_conf + 0.3 * opacity_conf
+
+    # Normalize final confidence
     conf = conf / conf.max()
+
+    # Map confidence back to original indices if sampled
+    if N < len(splats["means"]):
+        full_conf = torch.zeros(len(splats["means"]), device=device)
+        full_conf[idx] = conf
+        conf = full_conf
 
     return conf  # shape [N,]
 
@@ -731,7 +721,7 @@ class Runner:
             pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W]
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            if cfg.use_conf_scores:
+            if cfg.use_conf_scores and step % conf_update_interval == 0:
                 lambda_conf = cfg.lambda_conf
                 conf_loss = lambda_conf * compute_confidence_loss(self.splats)
                 loss = recon_loss + conf_loss

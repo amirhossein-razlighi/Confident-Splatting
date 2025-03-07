@@ -41,7 +41,6 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 # from gsplat.optimizers import SelectiveAdam
-os.environ["TORCH_CUDA_ARCH_LIST"] = "8.0 8.6+PTX 9.0+PTX 8.6 8.0 7.5"
 
 
 def compute_confidence_from_props(splats, k=10, batch_size=1000):

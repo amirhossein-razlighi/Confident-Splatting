@@ -44,41 +44,53 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 os.environ["TORCH_CUDA_ARCH_LIST"] = "8.0 8.6+PTX 9.0+PTX 8.6 8.0 7.5"
 
 
-def compute_confidence_from_props(splats, k=10):
-    """Compute a confidence score for each splat based on: - local density (from the splat means) - scale consistency (using exp(scales)) - opacity (via sigmoid(opacities)) All operations are GPU friendly."""
+def compute_confidence_from_props(splats, k=10, batch_size=1000):
+    """Compute confidence scores with batched distance calculations to save memory."""
     means = splats["means"]  # shape [N, 3]
     scales = torch.exp(splats["scales"])  # shape [N, 3]
     opacities = torch.sigmoid(splats["opacities"])  # shape [N,]
     N = means.shape[0]
-    # 1. Density: Compute approximate local density (using pairwise distances)
-    # For large N, use a subsample or efficient kNN; here's a simple version.
-    dists = torch.cdist(means, means, p=2)  # [N, N]
-    # Mask out self-distance by adding large value along diagonal:
-    dists = dists + torch.eye(N, device=means.device) * 1e6
-    k_smallest, _ = torch.topk(dists, k=k, largest=False)
-    local_density = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
+
+    # 1. Density: Compute approximate local density in batches
+    local_density = torch.zeros(N, device=means.device)
+
+    for i in range(0, N, batch_size):
+        end_idx = min(i + batch_size, N)
+        batch_means = means[i:end_idx]
+
+        # Compute distances between this batch and all points
+        batch_dists = torch.cdist(batch_means, means, p=2)  # [batch_size, N]
+
+        # Mask out self-distances
+        batch_mask = (
+            torch.arange(i, end_idx, device=means.device)[:, None]
+            == torch.arange(N, device=means.device)[None, :]
+        )
+        batch_dists = batch_dists.masked_fill(batch_mask, float("inf"))
+
+        # Get k nearest neighbors
+        k_smallest, _ = torch.topk(batch_dists, k=k, largest=False)  # [batch_size, k]
+        local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
 
     # Normalize density to [0, 1]
     density_norm = (local_density - local_density.min()) / (
         local_density.max() - local_density.min() + 1e-6
     )
 
-    # 2. Scale consistency: lower std. of scales indicates consistent covariance structure.
+    # 2. Scale consistency
     scale_std = scales.std(dim=1)  # [N,]
-    # Invert the std so that lower std gives higher confidence
     scale_conf = 1.0 / (scale_std + 1e-6)
-    # Normalize
     scale_conf = (scale_conf - scale_conf.min()) / (
         scale_conf.max() - scale_conf.min() + 1e-6
     )
 
-    # 3. Opacity: higher opacity means more confidence
+    # 3. Opacity confidence
     opacity_conf = opacities  # already in [0,1]
 
-    # Combine factors: weights can be tuned
+    # Combine factors
     conf = 0.4 * density_norm + 0.3 * scale_conf + 0.3 * opacity_conf
-    # Normalize to [0,1]
     conf = conf / conf.max()
+
     return conf  # shape [N,]
 
 

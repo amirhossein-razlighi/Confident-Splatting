@@ -557,6 +557,7 @@ class Runner:
         
         if self.cfg.use_conf_scores:
             mask_conf, conf_all = filter_splats_by_confidence(self.splats, self.cfg)
+            self.num_low_conf_splats = (~mask_conf).sum().item()
             mask_conf = mask_conf.squeeze(-1)
             # Filter splats: note that filtering all parameters consistently
             means = self.splats["means"][mask_conf]
@@ -802,6 +803,8 @@ class Runner:
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            if cfg.use_conf_scores:
+                desc += f"num splats with low conf: {self.num_low_conf_splats}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -829,6 +832,7 @@ class Runner:
                 
                 if self.cfg.use_conf_scores:
                     self.writer.add_scalar("train/conf_loss", conf_loss.item(), step)
+                    self.writer.add_scalar("train/num_low_conf_splats", self.num_low_conf_splats, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:

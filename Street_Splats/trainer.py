@@ -43,7 +43,7 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 # from gsplat.optimizers import SelectiveAdam
 
 
-def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1024):
+def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=10_000):
     """Compute confidence on a random subset of points
 
     Args:
@@ -101,25 +101,33 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
 
     # Combine factors with weights
     conf = 0.4 * density_norm + 0.3 * scale_conf + 0.3 * opacity_conf
-
-    # Normalize final confidence
-    conf = conf / conf.max()
-
     # Map confidence back to original indices if sampled
     if N < len(splats["means"]):
         full_conf = torch.zeros(len(splats["means"]), device=device)
         full_conf[idx] = conf
         conf = full_conf
-
-    return conf  # shape [N,]
+    conf = F.sigmoid(conf.unsqueeze(-1) + splats["conf_bias"])
+    return conf  # shape [N, 1]
 
 
 def compute_confidence_loss(splats):
-    """Compute a confidence loss that drives the confidence computed from properties to be near a desired target value (e.g., 0.8). You can combine this with a learnable bias."""
+    """
+    Compute a confidence loss that drives the confidence computed 
+    from properties to be near a desired target value (e.g., 0.8). 
+    You can combine this with a learnable bias.
+    """
     target_conf = 0.8
     computed_conf = compute_confidence_from_props(splats)  # [N,]
     loss = torch.mean((computed_conf - target_conf) ** 2)
     return loss
+
+def filter_splats_by_confidence(splats, cfg):
+    """
+    Returns a boolean mask for splats that exceed the confidence threshold.
+    """
+    conf = compute_confidence_from_props(splats)  # [N,]
+    mask = conf > cfg.confidence_threshold
+    return mask, conf
 
 
 @dataclass
@@ -251,6 +259,9 @@ class Config:
     
     # The interval of which the confidence score gets updated
     conf_update_interval: int = 1
+    
+    # Threshold to filter splats with low confidence during evaluation/rendering
+    confidence_threshold: float = 0.2
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -319,6 +330,7 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
         ("confs", torch.nn.Parameter(torch.full((points.shape[0], 1), 0.0)), 1e-3),
+        ("conf_bias", torch.nn.Parameter(torch.zeros(points.shape[0], 1)), 1e-3),
     ]
 
     if feature_dim is None:
@@ -541,26 +553,43 @@ class Runner:
         masks: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
-
         image_ids = kwargs.pop("image_ids", None)
-        if self.cfg.app_opt:
-            colors = self.app_module(
-                features=self.splats["features"],
-                embed_ids=image_ids,
-                dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
-                sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
-            )
-            colors = colors + self.splats["colors"]
-            colors = torch.sigmoid(colors)
+        
+        if self.cfg.use_conf_scores:
+            mask_conf, conf_all = filter_splats_by_confidence(self.splats, self.cfg)
+            mask_conf = mask_conf.squeeze(-1)
+            # Filter splats: note that filtering all parameters consistently
+            means = self.splats["means"][mask_conf]
+            quats = self.splats["quats"][mask_conf]
+            scales = torch.exp(self.splats["scales"])[mask_conf]
+            opacities = torch.sigmoid(self.splats["opacities"])[mask_conf]
+            # For color information, if using SH decomposition:
+            if "sh0" in self.splats and "shN" in self.splats:
+                sh0 = self.splats["sh0"][mask_conf]
+                shN = self.splats["shN"][mask_conf]
+                colors = torch.cat([sh0, shN], 1)
+            else:
+                colors = None  # or handle the alternative feature case accordingly
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            means = self.splats["means"]  # [N, 3]
+            # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+            # rasterization does normalization internally
+            quats = self.splats["quats"]  # [N, 4]
+            scales = torch.exp(self.splats["scales"])  # [N, 3]
+            opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
+            if self.cfg.app_opt:
+                colors = self.app_module(
+                    features=self.splats["features"],
+                    embed_ids=image_ids,
+                    dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
+                    sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
+                )
+                colors = colors + self.splats["colors"]
+                colors = torch.sigmoid(colors)
+            else:
+                colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+        
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,

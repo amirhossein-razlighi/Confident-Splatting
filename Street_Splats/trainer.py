@@ -34,6 +34,7 @@ from lib_bilagrid import (
     color_correct,
     total_variation_loss,
 )
+from torch.distributions import Beta
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -42,10 +43,11 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 # from gsplat.optimizers import SelectiveAdam
 
-conf_model = torch.nn.Sequential([
+conf_model = torch.nn.Sequential(
     torch.nn.Linear(3, 128),
-    torch.nn.Linear(128, 1)
-])
+    torch.nn.Linear(128, 1),
+).cuda()
+
 conf_optimizer =  torch.optim.Adam(
                     conf_model.parameters(),
                     lr=1e-3
@@ -103,13 +105,29 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
 
 def compute_confidence_loss(splats):
     """
-    Compute a confidence loss that drives the confidence computed 
-    from properties to be near a desired target value (e.g., 0.8). 
-    You can combine this with a learnable bias.
+    Compute KL divergence loss between predicted confidence and target Beta distribution.
+    This encourages confidences close to 0.8, while allowing uncertainty.
     """
-    target_conf = 0.8
-    computed_conf = compute_confidence_from_props(splats)  # [N,]
-    loss = torch.mean((computed_conf - target_conf) ** 2)
+    predicted_conf = compute_confidence_from_props(splats)  # shape [N, 1]
+    predicted_conf = predicted_conf.clamp(1e-5, 1 - 1e-5)  # to avoid log(0)
+
+    # Flatten to shape [N]
+    predicted_conf = predicted_conf.squeeze(-1)
+
+    # Define the target distribution (peaks near 0.8)
+    target_dist = Beta(concentration1=torch.tensor(8.0, device="cuda"),
+                       concentration0=torch.tensor(2.0, device="cuda"))
+
+    # Target probabilities at predicted_conf values
+    target_prob = target_dist.log_prob(predicted_conf)  # [N]
+
+    # Our predicted_conf are probs; get their log-probs
+    pred_log_prob = torch.log(predicted_conf)
+
+    # KL divergence per sample: KL(pred || target) = pred * (log(pred) - log(target))
+    kl_div = predicted_conf * (pred_log_prob - target_prob)
+
+    loss = kl_div.mean()
     return loss
 
 def filter_splats_by_confidence(splats, cfg):
@@ -117,7 +135,8 @@ def filter_splats_by_confidence(splats, cfg):
     Returns a boolean mask for splats that exceed the confidence threshold.
     """
     conf = compute_confidence_from_props(splats)  # [N,]
-    mask = conf > cfg.confidence_threshold
+    # mask = conf > cfg.confidence_threshold
+    mask = conf > conf.mean()
     return mask, conf
 
 
@@ -246,13 +265,13 @@ class Config:
     use_conf_scores: bool = False
 
     # The multiplier (lambda) for confidence scores
-    lambda_conf: float = 0.01
+    lambda_conf: float = 0.1
     
     # The interval of which the confidence score gets updated
     conf_update_interval: int = 1
     
     # Threshold to filter splats with low confidence during evaluation/rendering
-    confidence_threshold: float = 0.2
+    confidence_threshold: float = 0.5
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]

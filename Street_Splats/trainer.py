@@ -136,7 +136,7 @@ def compute_confidence_loss(splats):
     target_conf = 0.8
     computed_conf = compute_confidence_from_props(splats)  # [N,]
     loss = torch.mean((computed_conf - target_conf) ** 2)
-    return loss
+    return loss, computed_conf
 
 def filter_splats_by_confidence(splats, cfg):
     """
@@ -786,7 +786,7 @@ class Runner:
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
                 lambda_conf = cfg.lambda_conf
-                conf_loss = compute_confidence_loss(self.splats)
+                conf_loss, computed_conf = compute_confidence_loss(self.splats)
                 loss = (1 - lambda_conf) * recon_loss + lambda_conf * conf_loss
             else:
                 loss = recon_loss
@@ -839,13 +839,13 @@ class Runner:
             pbar.set_description(desc)
 
             # write images (gt and render)
-            if world_rank == 0 and step % 800 == 0:
-                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-                canvas = canvas.reshape(-1, *canvas.shape[2:])
-                imageio.imwrite(
-                    f"{self.render_dir}/train_rank{self.world_rank}.png",
-                    (canvas * 255).astype(np.uint8),
-                )
+            # if world_rank == 0 and step % 800 == 0:
+            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #     imageio.imwrite(
+            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         (canvas * 255).astype(np.uint8),
+            #     )
 
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -856,8 +856,9 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 
                 if self.cfg.use_conf_scores:
-                    self.writer.add_histogram("train/confidence", compute_confidence_from_props(self.splats).detach().cpu().numpy(), step)
+                    self.writer.add_histogram("train/confidence_scores", computed_conf.detach().cpu().numpy(), step)
                     self.writer.add_scalar("train/confidence_loss", conf_loss.item(), step)
+                    self.writer.add_scalar("train/confidence_bias", self.splats["conf_bias"].data.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:

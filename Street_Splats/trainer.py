@@ -55,7 +55,7 @@ class ConfidenceNet(nn.Module):
         x = self.fc2(x)
         return x  # returning raw logit values
     
-def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=10_000):
+def compute_confidence_from_props(model, splats, bias = None, sample_size=10_000, k=10, batch_size=10_000):
     """Compute confidence on a random subset of points using a learnable network.
 
     Args:
@@ -113,9 +113,9 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
     features = torch.stack([density_norm, scale_conf, opacity_conf], dim=-1)  # shape: [N_sample, 3]
 
     # Use the learnable confidence network. It should be stored in splats.
-    logit = splats["conf_net"](features)  # shape: [N_sample, 1]
-    if "conf_bias" in splats:
-        logit = logit + splats["conf_bias"]
+    logit = model(features)  # shape: [N_sample, 1]
+    if bias is not None:
+        logit = logit + bias
     conf_sample = torch.sigmoid(logit)  # final confidence, in [0, 1]
 
     # Map confidence back to original indices if sampling was used.
@@ -127,22 +127,22 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
     return conf_sample  # shape: [N, 1]
 
 
-def compute_confidence_loss(splats):
+def compute_confidence_loss(model, bias, splats):
     """
     Compute a confidence loss that drives the confidence computed 
     from properties to be near a desired target value (e.g., 0.8). 
     You can combine this with a learnable bias.
     """
     target_conf = 0.8
-    computed_conf = compute_confidence_from_props(splats)  # [N,]
+    computed_conf = compute_confidence_from_props(model, splats, bias)  # [N,]
     loss = torch.mean((computed_conf - target_conf) ** 2)
     return loss, computed_conf
 
-def filter_splats_by_confidence(splats, cfg):
+def filter_splats_by_confidence(model, bias, splats, cfg):
     """
     Returns a boolean mask for splats that exceed the confidence threshold.
     """
-    conf = compute_confidence_from_props(splats)  # [N,]
+    conf = compute_confidence_from_props(model, splats, bias)  # [N,]
     mask = conf > cfg.confidence_threshold
     return mask, conf
 
@@ -363,9 +363,6 @@ def create_splats_with_optimizers(
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     
-    splats["conf_net"] = ConfidenceNet(input_dim=3, hidden_dim=8).to(device)
-    splats["conf_bias"] = nn.Parameter(torch.zeros(1, device=device))
-    
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
@@ -388,14 +385,6 @@ def create_splats_with_optimizers(
         for name, _, lr in params
     }
     
-    optimizers["conf_net"] = torch.optim.Adam(
-    splats["conf_net"].parameters(),
-    lr=2.5e-3 * math.sqrt(BS)
-    )
-    optimizers["conf_bias"] = torch.optim.Adam(
-        [splats["conf_bias"]],
-        lr=2.5e-3 * math.sqrt(BS)
-    )
     return splats, optimizers
 
 
@@ -584,7 +573,7 @@ class Runner:
         image_ids = kwargs.pop("image_ids", None)
         
         if self.cfg.use_conf_scores:
-            mask_conf, conf_all = filter_splats_by_confidence(self.splats, self.cfg)
+            mask_conf, conf_all = filter_splats_by_confidence(self.conf_net, self.conf_bias, self.splats, self.cfg)
             mask_conf = mask_conf.squeeze(-1)
             # Filter splats: note that filtering all parameters consistently
             means = self.splats["means"][mask_conf]
@@ -651,6 +640,15 @@ class Runner:
         device = self.device
         world_rank = self.world_rank
         world_size = self.world_size
+        
+        if cfg.use_conf_scores:
+            conf_net = ConfidenceNet(input_dim=3, hidden_dim=8).to(device)
+            conf_bias = nn.Parameter(torch.zeros(1, device=device))
+            conf_optimizer = torch.optim.Adam(
+            list(conf_net.parameters()) + [conf_bias], lr=2.5e-3
+        )
+            self.conf_net = conf_net
+            self.conf_bias = conf_bias
 
         # Dump cfg.
         if world_rank == 0:
@@ -786,7 +784,7 @@ class Runner:
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
                 lambda_conf = cfg.lambda_conf
-                conf_loss, computed_conf = compute_confidence_loss(self.splats)
+                conf_loss, computed_conf = compute_confidence_loss(self.conf_net, self.conf_bias, self.splats)
                 loss = (1 - lambda_conf) * recon_loss + lambda_conf * conf_loss
             else:
                 loss = recon_loss
@@ -858,7 +856,6 @@ class Runner:
                 if self.cfg.use_conf_scores:
                     self.writer.add_histogram("train/confidence_scores", computed_conf.detach().cpu().numpy(), step)
                     self.writer.add_scalar("train/confidence_loss", conf_loss.item(), step)
-                    self.writer.add_scalar("train/confidence_bias", self.splats["conf_bias"].data.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:
@@ -924,6 +921,10 @@ class Runner:
                     visibility_mask = (info["radii"] > 0).any(0)
 
             # optimize
+            if self.cfg.use_conf_scores:
+                conf_optimizer.step()
+                conf_optimizer.zero_grad(set_to_none=True)
+            
             for optimizer in self.optimizers.values():
                 if cfg.visible_adam:
                     optimizer.step(visibility_mask)

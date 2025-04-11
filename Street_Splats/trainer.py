@@ -1182,6 +1182,10 @@ if __name__ == "__main__":
 
     # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
     CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --steps_scaler 0.25
+    
+    # Our sample running code
+    python3 trainer.py mcmc --data_dir data/bilarf/bilarf_data/testscenes/building
+    --result_dir results/bulding/with_conf --use_conf_scores
 
     """
 

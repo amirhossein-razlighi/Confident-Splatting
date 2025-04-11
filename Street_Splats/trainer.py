@@ -42,21 +42,21 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 # from gsplat.optimizers import SelectiveAdam
 
+conf_model = torch.nn.Sequential([
+    torch.nn.Linear(3, 128),
+    torch.nn.Linear(128, 1)
+])
+conf_optimizer =  torch.optim.Adam(
+                    conf_model.parameters(),
+                    lr=1e-3
+                )
 
 def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=10_000):
-    """Compute confidence on a random subset of points
-
-    Args:
-        splats: Dictionary containing gaussian parameters
-        sample_size: Number of points to sample for confidence computation
-        k: Number of nearest neighbors for density estimation
-        batch_size: Batch size for processing chunks of points
-    """
     means = splats["means"]
     N = means.shape[0]
     device = means.device
 
-    # Randomly sample points if N is too large
+    # Random sampling if necessary
     if N > sample_size:
         idx = torch.randperm(N, device=device)[:sample_size]
         means = means[idx]
@@ -67,47 +67,38 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
         scales = torch.exp(splats["scales"])
         opacities = torch.sigmoid(splats["opacities"])
 
-    # Compute local density using batched processing
     local_density = torch.zeros(N, device=device)
 
     for i in range(0, N, batch_size):
         end_idx = min(i + batch_size, N)
         curr_means = means[i:end_idx]
-
-        # Compute distances to all other points
         dists = torch.cdist(curr_means, means)  # [batch, N]
-
-        # Get k nearest neighbors (excluding self)
-        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)  # Include self
-        k_smallest = k_smallest[:, 1:]  # Exclude self
-
-        # Compute density as inverse of mean distance
+        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)
+        k_smallest = k_smallest[:, 1:]
         local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
 
-    # Normalize density to [0, 1]
     density_norm = (local_density - local_density.min()) / (
         local_density.max() - local_density.min() + 1e-6
     )
-
-    # Scale consistency
-    scale_std = scales.std(dim=1)  # [N,]
+    scale_std = scales.std(dim=1)
     scale_conf = 1.0 / (scale_std + 1e-6)
     scale_conf = (scale_conf - scale_conf.min()) / (
         scale_conf.max() - scale_conf.min() + 1e-6
     )
-
-    # Opacity confidence (already in [0,1])
     opacity_conf = opacities
 
-    # Combine factors with weights
-    conf = 0.4 * density_norm + 0.3 * scale_conf + 0.3 * opacity_conf
-    # Map confidence back to original indices if sampled
+    # Feed features into confidence model
+    features = torch.stack([density_norm, scale_conf, opacity_conf], dim=1)  # [N, 3]
+    conf = conf_model(features)  # [N, 1]
+
     if N < len(splats["means"]):
-        full_conf = torch.zeros(len(splats["means"]), device=device)
+        full_conf = torch.zeros((len(splats["means"]), 1), device=device)
         full_conf[idx] = conf
         conf = full_conf
-    conf = F.sigmoid(conf.unsqueeze(-1) + splats["conf_bias"])
+
+    conf = torch.sigmoid(conf + splats["conf_bias"])  # final adjustment
     return conf  # shape [N, 1]
+
 
 
 def compute_confidence_loss(splats):
@@ -169,9 +160,9 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [3_500, 7_000, 15_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [3_500, 7_000, 15_000, 30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -255,7 +246,7 @@ class Config:
     use_conf_scores: bool = False
 
     # The multiplier (lambda) for confidence scores
-    lambda_conf: float = 0.2
+    lambda_conf: float = 0.01
     
     # The interval of which the confidence score gets updated
     conf_update_interval: int = 1
@@ -758,6 +749,7 @@ class Runner:
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
+                conf_optimizer.zero_grad()
                 lambda_conf = cfg.lambda_conf
                 conf_loss = compute_confidence_loss(self.splats)
                 loss = (1 - lambda_conf) * recon_loss + lambda_conf * conf_loss
@@ -801,6 +793,9 @@ class Runner:
                 )
 
             loss.backward()
+            
+            if self.cfg.use_conf_scores:
+                conf_optimizer.step()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.use_conf_scores:

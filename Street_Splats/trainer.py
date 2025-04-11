@@ -11,6 +11,7 @@ import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 import tqdm
 import tyro
 import viser
@@ -42,15 +43,26 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 # from gsplat.optimizers import SelectiveAdam
 
-
+class ConfidenceNet(nn.Module):
+    def __init__(self, input_dim: int = 3, hidden_dim: int = 8):
+        super(ConfidenceNet, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, 1)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [N, 3], where each sample is [density_norm, scale_conf, opacity_conf]
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x  # returning raw logit values
+    
 def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=10_000):
-    """Compute confidence on a random subset of points
+    """Compute confidence on a random subset of points using a learnable network.
 
     Args:
-        splats: Dictionary containing gaussian parameters
-        sample_size: Number of points to sample for confidence computation
-        k: Number of nearest neighbors for density estimation
-        batch_size: Batch size for processing chunks of points
+        splats: Dictionary containing gaussian parameters and a confidence network.
+        sample_size: Number of points to sample for confidence computation.
+        k: Number of nearest neighbors for density estimation.
+        batch_size: Batch size for processing chunks of points.
     """
     means = splats["means"]
     N = means.shape[0]
@@ -59,29 +71,26 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
     # Randomly sample points if N is too large
     if N > sample_size:
         idx = torch.randperm(N, device=device)[:sample_size]
-        means = means[idx]
-        scales = torch.exp(splats["scales"][idx])
-        opacities = torch.sigmoid(splats["opacities"][idx])
-        N = sample_size
+        means_sampled = means[idx]
+        scales_sampled = torch.exp(splats["scales"][idx])
+        opacities_sampled = torch.sigmoid(splats["opacities"][idx])
+        N_sample = sample_size
     else:
-        scales = torch.exp(splats["scales"])
-        opacities = torch.sigmoid(splats["opacities"])
+        means_sampled = means
+        scales_sampled = torch.exp(splats["scales"])
+        opacities_sampled = torch.sigmoid(splats["opacities"])
+        N_sample = N
 
     # Compute local density using batched processing
-    local_density = torch.zeros(N, device=device)
-
-    for i in range(0, N, batch_size):
-        end_idx = min(i + batch_size, N)
-        curr_means = means[i:end_idx]
-
-        # Compute distances to all other points
-        dists = torch.cdist(curr_means, means)  # [batch, N]
-
+    local_density = torch.zeros(N_sample, device=device)
+    for i in range(0, N_sample, batch_size):
+        end_idx = min(i + batch_size, N_sample)
+        curr_means = means_sampled[i:end_idx]
+        # Compute distances to all other points within the sample
+        dists = torch.cdist(curr_means, means_sampled)  # [batch, N_sample]
         # Get k nearest neighbors (excluding self)
-        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)  # Include self
-        k_smallest = k_smallest[:, 1:]  # Exclude self
-
-        # Compute density as inverse of mean distance
+        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)
+        k_smallest = k_smallest[:, 1:]  # remove self (first neighbor)
         local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
 
     # Normalize density to [0, 1]
@@ -89,25 +98,33 @@ def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=1
         local_density.max() - local_density.min() + 1e-6
     )
 
-    # Scale consistency
-    scale_std = scales.std(dim=1)  # [N,]
+    # Compute scale consistency as before
+    scale_std = scales_sampled.std(dim=1)  # [N_sample,]
     scale_conf = 1.0 / (scale_std + 1e-6)
     scale_conf = (scale_conf - scale_conf.min()) / (
         scale_conf.max() - scale_conf.min() + 1e-6
     )
 
-    # Opacity confidence (already in [0,1])
-    opacity_conf = opacities
+    # Opacity confidence is already in [0,1]
+    opacity_conf = opacities_sampled
 
-    # Combine factors with weights
-    conf = 0.4 * density_norm + 0.3 * scale_conf + 0.3 * opacity_conf
-    # Map confidence back to original indices if sampled
-    if N < len(splats["means"]):
-        full_conf = torch.zeros(len(splats["means"]), device=device)
-        full_conf[idx] = conf
-        conf = full_conf
-    conf = F.sigmoid(conf.unsqueeze(-1) + splats["conf_bias"])
-    return conf  # shape [N, 1]
+    # Stack the features: each splat gets a 3-D feature vector.
+    # The features are [density_norm, scale_conf, opacity_conf]
+    features = torch.stack([density_norm, scale_conf, opacity_conf], dim=-1)  # shape: [N_sample, 3]
+
+    # Use the learnable confidence network. It should be stored in splats.
+    logit = splats["conf_net"](features)  # shape: [N_sample, 1]
+    if "conf_bias" in splats:
+        logit = logit + splats["conf_bias"]
+    conf_sample = torch.sigmoid(logit)  # final confidence, in [0, 1]
+
+    # Map confidence back to original indices if sampling was used.
+    if N_sample < N:
+        full_conf = torch.zeros(N, device=device)
+        full_conf[idx] = conf_sample.squeeze(-1)
+        conf_sample = full_conf.unsqueeze(-1)
+    
+    return conf_sample  # shape: [N, 1]
 
 
 def compute_confidence_loss(splats):
@@ -255,7 +272,7 @@ class Config:
     use_conf_scores: bool = False
 
     # The multiplier (lambda) for confidence scores
-    lambda_conf: float = 0.01
+    lambda_conf: float = 0.2
     
     # The interval of which the confidence score gets updated
     conf_update_interval: int = 1
@@ -329,8 +346,6 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("confs", torch.nn.Parameter(torch.full((points.shape[0], 1), 0.0)), 1e-3),
-        ("conf_bias", torch.nn.Parameter(torch.zeros(points.shape[0], 1)), 1e-3),
     ]
 
     if feature_dim is None:
@@ -347,6 +362,10 @@ def create_splats_with_optimizers(
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
+    
+    splats["conf_net"] = ConfidenceNet(input_dim=3, hidden_dim=8).to(device)
+    splats["conf_bias"] = nn.Parameter(torch.zeros(1, device=device))
+    
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
@@ -368,6 +387,15 @@ def create_splats_with_optimizers(
         )
         for name, _, lr in params
     }
+    
+    optimizers["conf_net"] = torch.optim.Adam(
+    splats["conf_net"].parameters(),
+    lr=2.5e-3 * math.sqrt(BS)
+    )
+    optimizers["conf_bias"] = torch.optim.Adam(
+        [splats["conf_bias"]],
+        lr=2.5e-3 * math.sqrt(BS)
+    )
     return splats, optimizers
 
 
@@ -811,13 +839,13 @@ class Runner:
             pbar.set_description(desc)
 
             # write images (gt and render)
-            # if world_rank == 0 and step % 800 == 0:
-            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
-            #     imageio.imwrite(
-            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
-            #         (canvas * 255).astype(np.uint8),
-            #     )
+            if world_rank == 0 and step % 800 == 0:
+                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+                canvas = canvas.reshape(-1, *canvas.shape[2:])
+                imageio.imwrite(
+                    f"{self.render_dir}/train_rank{self.world_rank}.png",
+                    (canvas * 255).astype(np.uint8),
+                )
 
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -826,6 +854,10 @@ class Runner:
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
+                
+                if self.cfg.use_conf_scores:
+                    self.writer.add_histogram("train/confidence", compute_confidence_from_props(self.splats).detach().cpu().numpy(), step)
+                    self.writer.add_scalar("train/confidence_loss", conf_loss.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:

@@ -41,104 +41,8 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
-# from gsplat.optimizers import SelectiveAdam
-
-conf_model = torch.nn.Sequential(
-    torch.nn.Linear(3, 128),
-    torch.nn.Linear(128, 1),
-).cuda()
-
-conf_optimizer =  torch.optim.Adam(
-                    conf_model.parameters(),
-                    lr=1e-3
-                )
-
-def compute_confidence_from_props(splats, sample_size=10_000, k=10, batch_size=10_000):
-    means = splats["means"]
-    N = means.shape[0]
-    device = means.device
-
-    # Random sampling if necessary
-    if N > sample_size:
-        idx = torch.randperm(N, device=device)[:sample_size]
-        means = means[idx]
-        scales = torch.exp(splats["scales"][idx])
-        opacities = torch.sigmoid(splats["opacities"][idx])
-        N = sample_size
-    else:
-        scales = torch.exp(splats["scales"])
-        opacities = torch.sigmoid(splats["opacities"])
-
-    local_density = torch.zeros(N, device=device)
-
-    for i in range(0, N, batch_size):
-        end_idx = min(i + batch_size, N)
-        curr_means = means[i:end_idx]
-        dists = torch.cdist(curr_means, means)  # [batch, N]
-        k_smallest, _ = torch.topk(dists, k=k + 1, largest=False)
-        k_smallest = k_smallest[:, 1:]
-        local_density[i:end_idx] = 1.0 / (k_smallest.mean(dim=1) + 1e-6)
-
-    density_norm = (local_density - local_density.min()) / (
-        local_density.max() - local_density.min() + 1e-6
-    )
-    scale_std = scales.std(dim=1)
-    scale_conf = 1.0 / (scale_std + 1e-6)
-    scale_conf = (scale_conf - scale_conf.min()) / (
-        scale_conf.max() - scale_conf.min() + 1e-6
-    )
-    opacity_conf = opacities
-
-    # Feed features into confidence model
-    features = torch.stack([density_norm, scale_conf, opacity_conf], dim=1)  # [N, 3]
-    conf = conf_model(features)  # [N, 1]
-
-    if N < len(splats["means"]):
-        full_conf = torch.zeros((len(splats["means"]), 1), device=device)
-        full_conf[idx] = conf
-        conf = full_conf
-
-    conf = torch.sigmoid(conf + splats["conf_bias"])  # final adjustment
-    return conf  # shape [N, 1]
-
-
-
-def compute_confidence_loss(splats):
-    """
-    Compute KL divergence loss between predicted confidence and target Beta distribution.
-    This encourages confidences close to 0.8, while allowing uncertainty.
-    """
-    predicted_conf = compute_confidence_from_props(splats)  # shape [N, 1]
-    predicted_conf = predicted_conf.clamp(1e-5, 1 - 1e-5)  # to avoid log(0)
-
-    # Flatten to shape [N]
-    predicted_conf = predicted_conf.squeeze(-1)
-
-    # Define the target distribution (peaks near 0.8)
-    target_dist = Beta(concentration1=torch.tensor(8.0, device="cuda"),
-                       concentration0=torch.tensor(2.0, device="cuda"))
-
-    # Target probabilities at predicted_conf values
-    target_prob = target_dist.log_prob(predicted_conf)  # [N]
-
-    # Our predicted_conf are probs; get their log-probs
-    pred_log_prob = torch.log(predicted_conf)
-
-    # KL divergence per sample: KL(pred || target) = pred * (log(pred) - log(target))
-    kl_div = predicted_conf * (pred_log_prob - target_prob)
-
-    loss = kl_div.mean()
-    return loss
-
-def filter_splats_by_confidence(splats, cfg):
-    """
-    Returns a boolean mask for splats that exceed the confidence threshold.
-    """
-    conf = compute_confidence_from_props(splats)  # [N,]
-    # mask = conf > cfg.confidence_threshold
-    mask = conf > conf.mean()
-    return mask, conf
-
+from confidence_utils import confidence_values
+from eval_compression_helpers import evaluate_compression_curve
 
 @dataclass
 class Config:
@@ -264,14 +168,19 @@ class Config:
     # Whether to use confidence scores or not
     use_conf_scores: bool = False
 
-    # The multiplier (lambda) for confidence scores
-    lambda_conf: float = 0.1
+    # The multiplier (lambda) for sparsity_loss
+    lambda_sparsity: float = 2e-3
     
     # The interval of which the confidence score gets updated
     conf_update_interval: int = 1
     
     # Threshold to filter splats with low confidence during evaluation/rendering
-    confidence_threshold: float = 0.5
+    eval_conf_thresh: float = 0.0
+    
+    rank_interval: int = 25
+    rank_pairs: int = 2048
+    
+    beta_ent: float   = 2e-3      # weight for entropy penalty
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -445,10 +354,18 @@ class Runner:
             world_rank=world_rank,
             world_size=world_size,
         )
+        
+        N = self.splats["means"].shape[0]
+        self.splats.register_buffer("saliency",
+                             torch.zeros(N, device=self.device),
+                             persistent=True)
+        self.splats.register_buffer("vis", torch.zeros(N, device=self.device), persistent=True)
+        self.total_vis = 0
+
         print("Model initialized. Number of GS:", len(self.splats["means"]))
         
         if cfg.use_conf_scores:
-            print(f"Using Confidence-based method with lambda = {cfg.lambda_conf}")
+            print(f"Using Confidence-based method with lambda = {cfg.lambda_sparsity}")
 
         # Densification Strategy
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
@@ -561,45 +478,50 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
+        splats_override: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         image_ids = kwargs.pop("image_ids", None)
         
+        splats = splats_override if splats_override is not None else self.splats
+        
         if self.cfg.use_conf_scores:
-            mask_conf, conf_all = filter_splats_by_confidence(self.splats, self.cfg)
-            self.num_low_conf_splats = (~mask_conf).sum().item()
-            mask_conf = mask_conf.squeeze(-1)
-            # Filter splats: note that filtering all parameters consistently
-            means = self.splats["means"][mask_conf]
-            quats = self.splats["quats"][mask_conf]
-            scales = torch.exp(self.splats["scales"])[mask_conf]
-            opacities = torch.sigmoid(self.splats["opacities"])[mask_conf]
+            conf_vals = confidence_values(splats)
+            # *** SOFT GATE ***
+            means     = splats["means"]
+            quats     = splats["quats"]
+            scales    = torch.exp(splats["scales"])
+            opacities = torch.sigmoid(splats["opacities"]) * conf_vals
+            
+            self.avg_conf   = conf_vals.mean().item()
+            self.num_active = (conf_vals > 0.5).sum().item()
+            
             # For color information, if using SH decomposition:
-            if "sh0" in self.splats and "shN" in self.splats:
-                sh0 = self.splats["sh0"][mask_conf]
-                shN = self.splats["shN"][mask_conf]
+            if "sh0" in splats and "shN" in splats:
+                sh0 = splats["sh0"]
+                shN = splats["shN"]
                 colors = torch.cat([sh0, shN], 1)
             else:
                 colors = None  # or handle the alternative feature case accordingly
         else:
-            means = self.splats["means"]  # [N, 3]
+            means = splats["means"]  # [N, 3]
             # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
             # rasterization does normalization internally
-            quats = self.splats["quats"]  # [N, 4]
-            scales = torch.exp(self.splats["scales"])  # [N, 3]
-            opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+            quats = splats["quats"]  # [N, 4]
+            scales = torch.exp(splats["scales"])  # [N, 3]
+            opacities = torch.sigmoid(splats["opacities"])  # [N,]
 
             if self.cfg.app_opt:
                 colors = self.app_module(
-                    features=self.splats["features"],
+                    features=splats["features"],
                     embed_ids=image_ids,
                     dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                     sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
                 )
-                colors = colors + self.splats["colors"]
+                colors = colors + splats["colors"]
                 colors = torch.sigmoid(colors)
             else:
-                colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+                colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
         
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -628,6 +550,24 @@ class Runner:
         if masks is not None:
             render_colors[~masks] = 0
         return render_colors, render_alphas, info
+
+    def _sync_buffers(self):
+        """Keep saliency and visibility buffers same length as current splats."""
+        N = self.splats["means"].shape[0]
+
+        for name in ["saliency", "vis"]:
+            buf = getattr(self.splats, name)            # tensor
+            if buf.shape[0] == N:
+                continue
+
+            if buf.shape[0] < N:                        # grew → pad zeros
+                extra = torch.zeros(N - buf.shape[0], device=buf.device)
+                buf = torch.cat([buf, extra], 0)
+            else:                                       # shrank → truncate
+                buf = buf[:N]
+
+            self.splats.register_buffer(name, buf, persistent=True)
+
 
     def train(self):
         cfg = self.cfg
@@ -682,6 +622,7 @@ class Runner:
             pin_memory=True,
         )
         trainloader_iter = iter(trainloader)
+        
 
         # Training loop.
         global_tic = time.time()
@@ -735,6 +676,7 @@ class Runner:
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
             )
+
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
@@ -767,13 +709,30 @@ class Runner:
             pixels_p = pixels.permute(0, 3, 1, 2)  # [B, 3, H, W]
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            loss = recon_loss
+            
             if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
-                conf_optimizer.zero_grad()
-                lambda_conf = cfg.lambda_conf
-                conf_loss = compute_confidence_loss(self.splats)
-                loss = (1 - lambda_conf) * recon_loss + lambda_conf * conf_loss
-            else:
-                loss = recon_loss
+                conf_vals = confidence_values(self.splats)
+                sparsity_loss = (conf_vals).mean()
+                loss += cfg.lambda_sparsity * sparsity_loss
+                
+                # ── entropy penalty ──────────────────────────────────────────
+                # if cfg.beta_ent > 0:
+                #     eps = 1e-6
+                #     ent = -(conf_vals*torch.log(conf_vals+eps) +
+                #             (1-conf_vals)*torch.log(1-conf_vals+eps)).mean()
+                    
+                    # ent = (-0.5 * (torch.log(conf_vals+eps) + # It's actually KL!
+                    #     torch.log1p(-conf_vals+eps))).mean()
+                    # loss += cfg.beta_ent * ent
+
+            if step % cfg.rank_interval == 0:
+                s = self.splats.saliency.detach()
+                c = confidence_values(self.splats)
+                hi, lo = torch.topk(s, cfg.rank_pairs)[1], torch.topk(-s, cfg.rank_pairs)[1]
+                loss_rank = F.relu(1.0 + c[lo] - c[hi]).mean()
+                self.splats.saliency.zero_()
+                loss = loss + loss_rank
 
             if cfg.depth_loss:
                 # query depths from depth map
@@ -814,11 +773,26 @@ class Runner:
             loss.backward()
             
             if self.cfg.use_conf_scores:
-                conf_optimizer.step()
+                if "colors" in self.splats:
+                    grad_src = self.splats["colors"].grad          # [N,3]      (appearance mode)
+                else:
+                    # concatenate SH coefficients: [N, K, 3] where K = (D+1)**2
+                    grad0 = self.splats["sh0"].grad                # [N,1,3]     may be None
+                    gradN = self.splats["shN"].grad                # [N,K-1,3]
+                    if grad0 is None and gradN is None:
+                        grad_src = None
+                    else:
+                        # replace None with zeros to avoid crashes
+                        grad0 = torch.zeros_like(self.splats["sh0"]) if grad0 is None else grad0
+                        gradN = torch.zeros_like(self.splats["shN"]) if gradN is None else gradN
+                        grad_src = torch.cat([grad0, gradN], dim=1)         # [N,K,3]
+
+                if grad_src is not None:
+                    sal = grad_src.abs().mean(dim=(1,2))    # [N]  L1 saliency per splat
+                    self.splats.saliency.add_(sal)
+
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
-            if cfg.use_conf_scores:
-                desc += f"num splats with low conf: {self.num_low_conf_splats}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -844,9 +818,10 @@ class Runner:
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 
-                if self.cfg.use_conf_scores:
-                    self.writer.add_scalar("train/conf_loss", conf_loss.item(), step)
-                    self.writer.add_scalar("train/num_low_conf_splats", self.num_low_conf_splats, step)
+                if cfg.use_conf_scores and step % cfg.tb_every == 0:
+                    self.writer.add_scalar("train/avg_conf",  self.avg_conf,   step)
+                    self.writer.add_scalar("train/active50%", self.num_active, step)
+                    self.writer.add_scalar("train/entropy", ent.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:
@@ -951,10 +926,13 @@ class Runner:
                 )
             else:
                 assert_never(self.cfg.strategy)
+            
+            self._sync_buffers()
 
-            # eval the full set
+            # eval the full set 
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
+                self.eval(step, stage="val_compressed") if self.cfg.use_conf_scores else None
                 self.render_traj(step)
 
             # run compression
@@ -980,6 +958,24 @@ class Runner:
         device = self.device
         world_rank = self.world_rank
         world_size = self.world_size
+        
+        if self.cfg.use_conf_scores and "compress" in stage.lower():
+            conf_vals = confidence_values(self.splats)
+
+            thresh = getattr(self.cfg, "eval_conf_thresh", 0.10)
+            keep = conf_vals > thresh
+
+            print(f"[Eval] Pruning splats with conf ≤ {thresh:.2f}: "
+                f"{keep.sum().item()} / {len(keep)} remain.")
+
+            # Create pruned copy of splats
+            self.splats_eval = {
+                k: v.detach()[keep].to(self.device)
+                for k, v in self.splats.items()
+                }
+        else:
+            self.splats_eval = {k: v.detach().to(self.device) for k, v in self.splats.items()}
+
 
         valloader = torch.utils.data.DataLoader(
             self.valset, batch_size=1, shuffle=False, num_workers=1
@@ -1004,6 +1000,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
+                splats_override=self.splats_eval
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
@@ -1037,7 +1034,7 @@ class Runner:
             stats.update(
                 {
                     "ellipse_time": ellipse_time,
-                    "num_GS": len(self.splats["means"]),
+                    "num_GS": len(self.splats_eval["means"]),
                 }
             )
             print(
@@ -1054,7 +1051,7 @@ class Runner:
             self.writer.flush()
 
     @torch.no_grad()
-    def render_traj(self, step: int):
+    def render_traj(self, step: int, use_compression: bool = False):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
@@ -1112,6 +1109,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
+                splats_override= self.splats_eval if use_compression else None,
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             depths = renders[..., 3:4]  # [1, H, W, 1]
@@ -1130,11 +1128,26 @@ class Runner:
         """Entry for running compression."""
         print("Running compression...")
         world_rank = self.world_rank
+        
+        if self.cfg.use_conf_scores:
+            conf = confidence_values(self.splats)
+            THRESH = 0.1
+            keep = conf > THRESH
+            
+            print(f"Pruning for compression: kept {keep.sum().item()} / {len(keep)} splats "
+                  f"(threshold={THRESH:.2f})")
+            
+            splats_pruned = {
+                k: v.detach()[keep].cpu()           #   tensors only
+                for k, v in self.splats.items()
+            }
+        else:
+            splats_pruned = {k: v.detach().cpu() for k, v in self.splats.items()}
 
         compress_dir = f"{cfg.result_dir}/compression/rank{world_rank}"
         os.makedirs(compress_dir, exist_ok=True)
 
-        self.compression_method.compress(compress_dir, self.splats)
+        self.compression_method.compress(compress_dir, splats_pruned)
 
         # evaluate compression
         splats_c = self.compression_method.decompress(compress_dir)
@@ -1182,7 +1195,12 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        runner.render_traj(step=step)
+        runner.eval(step=step, stage="val_compressed") if cfg.use_conf_scores else None
+        runner.render_traj(step=step, use_compression= cfg.use_conf_scores)
+        _ = evaluate_compression_curve(runner,
+                               thresholds=np.linspace(0,1.0,20),  # tweak as you like
+                               save_dir=f"{cfg.result_dir}/plots",
+                               stage="val")
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:

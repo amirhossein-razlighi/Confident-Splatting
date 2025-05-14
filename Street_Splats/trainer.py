@@ -41,7 +41,7 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
-from confidence_utils import confidence_values
+from confidence_utils import confidence_values, confidence_values_with_gumbel_noise
 from eval_compression_helpers import evaluate_compression_curve
 
 @dataclass
@@ -181,6 +181,7 @@ class Config:
     rank_pairs: int = 2048
     
     beta_ent: float   = 2e-3      # weight for entropy penalty
+    conf_temperature: float = 0.5
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -248,8 +249,10 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("confs", torch.nn.Parameter(torch.full((points.shape[0], 1), 0.0)), 1e-3),
-        ("conf_bias", torch.nn.Parameter(torch.zeros(points.shape[0], 1)), 1e-3),
+        # ("confs", torch.nn.Parameter(torch.full((points.shape[0], 1), 0.0)), 1e-3),
+        # ("conf_bias", torch.nn.Parameter(torch.zeros(points.shape[0], 1)), 1e-3),
+        ("conf_alpha", torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
+        ("conf_beta",  torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
     ]
 
     if feature_dim is None:
@@ -487,6 +490,7 @@ class Runner:
         
         if self.cfg.use_conf_scores:
             conf_vals = confidence_values(splats)
+            
             # *** SOFT GATE ***
             means     = splats["means"]
             quats     = splats["quats"]
@@ -717,14 +721,19 @@ class Runner:
                 loss += cfg.lambda_sparsity * sparsity_loss
                 
                 # ── entropy penalty ──────────────────────────────────────────
-                # if cfg.beta_ent > 0:
+                if cfg.beta_ent > 0:
+                    beta_dist = torch.distributions.Beta(F.softplus(self.splats["conf_alpha"]) + 1e-6,  
+                                                         F.softplus(self.splats["conf_beta"]) + 1e-6)
+                    entropy = beta_dist.entropy().mean()
+                    loss += cfg.beta_ent * entropy
+
                 #     eps = 1e-6
                 #     ent = -(conf_vals*torch.log(conf_vals+eps) +
                 #             (1-conf_vals)*torch.log(1-conf_vals+eps)).mean()
                     
-                    # ent = (-0.5 * (torch.log(conf_vals+eps) + # It's actually KL!
-                    #     torch.log1p(-conf_vals+eps))).mean()
-                    # loss += cfg.beta_ent * ent
+                #     # ent = (-0.5 * (torch.log(conf_vals+eps) + # It's actually KL!
+                #     #     torch.log1p(-conf_vals+eps))).mean()
+                #     loss += cfg.beta_ent * ent
 
             if step % cfg.rank_interval == 0:
                 s = self.splats.saliency.detach()
@@ -821,7 +830,7 @@ class Runner:
                 if cfg.use_conf_scores and step % cfg.tb_every == 0:
                     self.writer.add_scalar("train/avg_conf",  self.avg_conf,   step)
                     self.writer.add_scalar("train/active50%", self.num_active, step)
-                    self.writer.add_scalar("train/entropy", ent.item(), step)
+                    # self.writer.add_scalar("train/entropy", ent.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:
@@ -1198,7 +1207,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         runner.eval(step=step, stage="val_compressed") if cfg.use_conf_scores else None
         runner.render_traj(step=step, use_compression= cfg.use_conf_scores)
         _ = evaluate_compression_curve(runner,
-                               thresholds=np.linspace(0,1.0,20),  # tweak as you like
+                               thresholds=np.linspace(0,1.0,20),
                                save_dir=f"{cfg.result_dir}/plots",
                                stage="val")
         if cfg.compression is not None:

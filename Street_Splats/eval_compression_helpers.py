@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from collections import defaultdict
 from pathlib import Path
+from torch.utils.data import DataLoader
 
 from confidence_utils import confidence_values
 
@@ -20,7 +21,7 @@ def _render_dataset(runner, splats_override, stage="val"):
     """
     device = runner.device
     cfg    = runner.cfg
-    valloader = torch.utils.data.DataLoader(
+    valloader = DataLoader(
         runner.valset, batch_size=1, shuffle=False, num_workers=1
     )
     metrics = defaultdict(list)
@@ -45,7 +46,7 @@ def _render_dataset(runner, splats_override, stage="val"):
             masks=masks,
             splats_override=splats_override,
         )
-        # clip to [0,1] and convert to CHW for metrics
+
         colors = torch.clamp(colors, 0.0, 1.0)
         colors_p = colors.permute(0, 3, 1, 2)
         pixels_p = pixels.permute(0, 3, 1, 2)
@@ -54,30 +55,54 @@ def _render_dataset(runner, splats_override, stage="val"):
         metrics["ssim"].append(runner.ssim(colors_p, pixels_p))
         metrics["lpips"].append(runner.lpips(colors_p, pixels_p))
 
-    # stack → scalar
-    out = {
-        k: torch.stack(v).mean().item() for k, v in metrics.items()
-    }
+    out = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
     return out
+
+
+def _render_first_image(runner, splats_override):
+    """Render and return the first validation image as a HxWx3 uint8 array."""
+    device = runner.device
+    cfg    = runner.cfg
+    loader = DataLoader(runner.valset, batch_size=1, shuffle=False, num_workers=1)
+    data, = [next(iter(loader))]
+    camtoworlds = data["camtoworld"].to(device)
+    Ks          = data["K"].to(device)
+    pixels      = data["image"].to(device) / 255.0
+    masks       = data.get("mask", None)
+    if masks is not None:
+        masks = masks.to(device)
+    H, W = pixels.shape[1:3]
+
+    colors, _, _ = runner.rasterize_splats(
+        camtoworlds=camtoworlds,
+        Ks=Ks,
+        width=W,
+        height=H,
+        sh_degree=cfg.sh_degree,
+        near_plane=cfg.near_plane,
+        far_plane=cfg.far_plane,
+        masks=masks,
+        splats_override=splats_override,
+    )
+    arr = torch.clamp(colors, 0.0, 1.0)[0].cpu().detach().numpy()
+    return (arr * 255).astype(np.uint8)
 
 
 def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage="val"):
     """Evaluate quality vs. #splats for a list of confidence thresholds.
 
-    * runner … your existing Runner instance (already loaded with ckpt)
-    * thresholds … iterable of float thresholds.  Defaults to 0→0.9 step 0.05
-    * save_dir … where to dump .png & .csv
+    * runner. existing Runner instance
+    * thresholds. iterable of float thresholds.  Defaults to 0~0.9 step 0.05
+    * save_dir. where to dump .png & .csv
     Returns the pandas DataFrame with all statistics.
     """
     cfg = runner.cfg
     device = runner.device
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    # default thresholds
     if thresholds is None:
-        thresholds = np.linspace(0.0, 0.9, 19)  # 0,0.05,…,0.9
+        thresholds = np.linspace(0.0, 0.9, 19)
 
-    # pre‑compute confidences once on CPU
     conf = confidence_values(runner.splats).cpu()
 
     rows = []
@@ -86,7 +111,6 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
         n_keep = int(keep.sum())
         frac   = n_keep / len(conf)
 
-        # build a *detached* splat dict to avoid autograd/comms overhead
         splats_thr = {k: v.detach()[keep.to(v.device)] for k, v in runner.splats.items()}
 
         stats = _render_dataset(runner, splats_thr, stage=stage)
@@ -101,23 +125,56 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
     df = pd.DataFrame(rows)
     df.to_csv(Path(save_dir)/f"compression_curve_{stage}.csv", index=False)
 
-    # ── plotting ─────────────────────────────────────────────────────────────
+    # ── quantitative plot ─────────────────────────────────────────────────────
     fig, ax1 = plt.subplots(figsize=(7,4))
     ax2 = ax1.twinx()
-
     ax1.plot(df["threshold"], df["psnr"], marker="o")
     ax1.set_xlabel("confidence threshold")
     ax1.set_ylabel("PSNR ↑")
-
     ax2.plot(df["threshold"], df["num_splats"], marker="s", linestyle="--")
     ax2.set_ylabel("# splats kept ↓")
-
     ax1.grid(True, which="both", linestyle=":", linewidth=0.5)
     plt.title("Quality / compression trade-off")
     plt.tight_layout()
     out_path = Path(save_dir)/f"compression_curve_{stage}.png"
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
-
     print(f"Saved plot → {out_path.absolute()}")
+
+    # ── qualitative grid ───────────────────────────────────────────────────────
+    all_thresholds = np.concatenate([thresholds])
+    n = len(all_thresholds)
+    cols = min(4, n)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 4*rows))
+    axes = axes.flatten()
+
+    orig_splats = len(runner.splats['means'])
+
+    for i, thr in enumerate(all_thresholds):
+        ax = axes[i]
+        if thr == 0.0:
+            splats_override = runner.splats
+        else:
+            keep = (conf > thr).to(runner.device)
+            splats_override = {k: v.detach()[keep] for k, v in runner.splats.items()}
+        img = _render_first_image(runner, splats_override)
+        ax.imshow(img)
+        ax.axis('off')
+        if thr == 0.0:
+            title = f"Original\n#splats={orig_splats}"
+        else:
+            num = int((conf > thr).sum().item())
+            title = f"thr={thr:.2f}\n#splats={num}"
+        ax.set_title(title)
+
+    for j in range(n, len(axes)):
+        axes[j].axis('off')
+
+    plt.tight_layout()
+    grid_path = Path(save_dir)/f"qualitative_grid_{stage}.png"
+    plt.savefig(grid_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved qualitative grid → {grid_path.absolute()}")
+
     return df

@@ -128,11 +128,19 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
     # ── quantitative plot ─────────────────────────────────────────────────────
     fig, ax1 = plt.subplots(figsize=(7,4))
     ax2 = ax1.twinx()
-    ax1.plot(df["threshold"], df["psnr"], marker="o")
+    c1 = 'tab:blue'
+    c2 = 'tab:green'
+
+    ax1.plot(df["threshold"], df["psnr"], marker="o", color=c1, label="PSNR")
     ax1.set_xlabel("confidence threshold")
-    ax1.set_ylabel("PSNR ↑")
-    ax2.plot(df["threshold"], df["num_splats"], marker="s", linestyle="--")
-    ax2.set_ylabel("# splats kept ↓")
+    ax1.set_ylabel("PSNR ↑", color=c1)
+    ax1.tick_params(axis='y', labelcolor=c1)
+    
+    # num_splats on right axis, in red
+    ax2.plot(df["threshold"], df["num_splats"], marker="s", linestyle="--", color=c2, label="# splats")
+    ax2.set_ylabel("# splats kept ↓", color=c2)
+    ax2.tick_params(axis='y', labelcolor=c2)
+    
     ax1.grid(True, which="both", linestyle=":", linewidth=0.5)
     plt.title("Quality / compression trade-off")
     plt.tight_layout()

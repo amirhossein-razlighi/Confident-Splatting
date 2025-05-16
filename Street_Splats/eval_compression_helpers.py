@@ -120,7 +120,7 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
             "fraction": frac,
             **stats,
         })
-        print(f"thr={thr:.2f}  num={n_keep}  PSNR={stats['psnr']:.2f}  SSIM={stats['ssim']:.3f}  LPIPS={stats['lpips']:.3f}")
+        print(f"thr={thr:.2f}  num={n_keep:,}  PSNR={stats['psnr']:.3f}  SSIM={stats['ssim']:.3f}  LPIPS={stats['lpips']:.3f}")
 
     df = pd.DataFrame(rows)
     df.to_csv(Path(save_dir)/f"compression_curve_{stage}.csv", index=False)
@@ -162,10 +162,10 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
         ax.imshow(img)
         ax.axis('off')
         if thr == 0.0:
-            title = f"Original\n#splats={orig_splats}"
+            title = f"Original\n#splats={orig_splats:,}"
         else:
             num = int((conf > thr).sum().item())
-            title = f"thr={thr:.2f}\n#splats={num}"
+            title = f"thr={thr:.2f}\n#splats={num:,}"
         ax.set_title(title)
 
     for j in range(n, len(axes)):

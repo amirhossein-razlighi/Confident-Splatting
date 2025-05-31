@@ -14,7 +14,7 @@ def confidence_values_with_gumbel_noise(splats, conf_temperature) -> Tensor:
 
 def confidence_values(splats) -> Tensor:
     """
-    Returns sigmoid(confs + conf_bias)  ∈  (0,1), shape [N].
+    Returns expected value of beta distribution -> alpha / (alpha + beta)
     """
     # conf_logits = splats["confs"].squeeze(-1) + splats["conf_bias"].squeeze(-1)
     # return torch.sigmoid(conf_logits)

@@ -34,7 +34,6 @@ from lib_bilagrid import (
     color_correct,
     total_variation_loss,
 )
-from torch.distributions import Beta
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -181,7 +180,6 @@ class Config:
     rank_pairs: int = 2048
     
     beta_ent: float   = 2e-3      # weight for entropy penalty
-    conf_temperature: float = 0.5
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -975,9 +973,8 @@ class Runner:
             keep = conf_vals > thresh
 
             print(f"[Eval] Pruning splats with conf ≤ {thresh:.2f}: "
-                f"{keep.sum().item()} / {len(keep)} remain.")
+                f"{keep.sum().item():,} / {len(keep):,} remain.")
 
-            # Create pruned copy of splats
             self.splats_eval = {
                 k: v.detach()[keep].to(self.device)
                 for k, v in self.splats.items()

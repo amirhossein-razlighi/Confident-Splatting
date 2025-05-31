@@ -184,5 +184,49 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
     plt.savefig(grid_path, dpi=150)
     plt.close(fig)
     print(f"Saved qualitative grid → {grid_path.absolute()}")
+    
+    render_comparison_images(runner, thresholds)
 
     return df
+
+
+
+def render_comparison_images(runner, thresholds=None, save_dir="plots", stage="val"):
+    """
+    Render and compare the original scene and the one pruned with the first confidence threshold.
+    Saves a side-by-side image comparison.
+    """
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    if thresholds is None:
+        thresholds = np.linspace(0.0, 0.9, 19)
+
+    thresholds = np.array(thresholds)
+    conf = confidence_values(runner.splats).cpu()
+    orig_splats = len(runner.splats['means'])
+
+    # Render original
+    img_original = _render_first_image(runner, runner.splats)
+
+    # Render with first nonzero threshold
+    first_thr = thresholds[1]  # skip 0.0
+    keep = (conf > first_thr).to(runner.device)
+    splats_pruned = {k: v.detach()[keep] for k, v in runner.splats.items()}
+    img_pruned = _render_first_image(runner, splats_pruned)
+    pruned_splats = int(keep.sum().item())
+
+    # Plot side-by-side
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    axes[0].imshow(img_original)
+    axes[0].axis('off')
+    axes[0].set_title(f"Original\n#splats={orig_splats:,}")
+
+    axes[1].imshow(img_pruned)
+    axes[1].axis('off')
+    axes[1].set_title(f"thr={first_thr:.2f}\n#splats={pruned_splats:,}")
+
+    plt.tight_layout()
+    out_path = Path(save_dir) / f"side_by_side_comparison_{stage}.png"
+    plt.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved side-by-side comparison → {out_path.absolute()}")

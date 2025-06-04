@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import tqdm
 import viser
 import matplotlib.cm as cm
+from datetime import datetime
 
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
@@ -141,10 +142,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
                     quats[masked_idx],
                     scales[masked_idx],
                     opacities[masked_idx],
-                    conf_rgb.expand(1, -1, -1),  # [1, N, 3]
+                    conf_rgb.expand(1, -1, -1),
                 )
             else:
-                # Directly slice the correct SH values
                 sh0_masked = sh0[masked_idx]
                 shN_masked = shN[masked_idx]
                 colors_masked = torch.cat([sh0_masked, shN_masked], dim=-2)
@@ -153,7 +153,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                     quats[masked_idx],
                     scales[masked_idx],
                     opacities[masked_idx],
-                    colors_masked, 
+                    colors_masked,
                 )
 
         class ViewerRenderer:
@@ -161,6 +161,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 self.show_confidence = False
                 self.threshold = 0.0
                 self.render_data = update_conf_view(self.threshold)
+                self.last_render = None
 
             def __call__(self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]):
                 width, height = img_wh
@@ -200,7 +201,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
                         sh_degree=sh_degree,
                         render_mode="RGB", radius_clip=3,
                     )
-                return render_colors[0, ..., :3].cpu().numpy()
+                self.last_render = render_colors[0, ..., :3].cpu().numpy()
+                return self.last_render
 
         viewer_render_fn = ViewerRenderer()
 
@@ -211,7 +213,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
             viewer_render_fn.show_confidence = not viewer_render_fn.show_confidence
             if viewer_render_fn.show_confidence:
                 viewer_render_fn.render_data = update_conf_view(viewer_render_fn.threshold)
-            print("Confidence View:", viewer_render_fn.show_confidence)
             cam = event.client.camera
             pos = np.array(cam.position)
             cam.position = (pos + np.random.normal(0, 1e-4, size=3))
@@ -219,12 +220,19 @@ def main(local_rank: int, world_rank, world_size: int, args):
         def update_threshold(event):
             viewer_render_fn.threshold = event.target.value
             viewer_render_fn.render_data = update_conf_view(viewer_render_fn.threshold, viewer_render_fn.show_confidence)
-            print("Updated threshold to", viewer_render_fn.threshold)
             cam = event.client.camera
             pos = np.array(cam.position)
             cam.position = (pos + np.random.normal(0, 1e-4, size=3))
 
+        def capture_frame(event):
+            if viewer_render_fn.last_render is not None:
+                os.makedirs("captures", exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                imageio.imwrite(f"captures/capture_{timestamp}.png", (np.clip(viewer_render_fn.last_render, 0.0, 1.0) * 255).astype(np.uint8))
+                print(f"Saved capture to captures/capture_{timestamp}.png")
+
         server.gui.add_button("Toggle Confidences' heatmap view").on_click(toggle_confidence)
+        server.gui.add_button("Capture Screenshot").on_click(capture_frame)
         conf_threshold_slider = server.gui.add_slider(
             label="# Confidence Threshold",
             min=0.0, max=1.0, step=0.05, initial_value=0.0,

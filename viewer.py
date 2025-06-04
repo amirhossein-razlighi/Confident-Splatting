@@ -18,10 +18,13 @@ import torch
 import torch.nn.functional as F
 import tqdm
 import viser
+import matplotlib.cm as cm
 
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
+
+from confidence_utils import confidence_values
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -107,6 +110,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         )
     else:
         means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
+        conf_alpha, conf_beta = [], []
+        
         for ckpt_path in args.ckpt:
             ckpt = torch.load(ckpt_path, map_location=device)["splats"]
             means.append(ckpt["means"])
@@ -115,6 +120,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
             opacities.append(torch.sigmoid(ckpt["opacities"]))
             sh0.append(ckpt["sh0"])
             shN.append(ckpt["shN"])
+            conf_alpha.append(ckpt["conf_alpha"])
+            conf_beta.append(ckpt["conf_beta"])
+            
         means = torch.cat(means, dim=0)
         quats = torch.cat(quats, dim=0)
         scales = torch.cat(scales, dim=0)
@@ -123,6 +131,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         shN = torch.cat(shN, dim=0)
         colors = torch.cat([sh0, shN], dim=-2)
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+        conf_alpha = torch.cat(conf_alpha, dim=0)
+        conf_beta = torch.cat(conf_beta, dim=0)
 
         # # crop
         # aabb = torch.tensor((-1.0, -1.0, -1.0, 1.0, 1.0, 0.7), device=device)
@@ -156,6 +166,13 @@ def main(local_rank: int, world_rank, world_size: int, args):
         # colors = colors.repeat(repeats**2, 1, 1)
         # opacities = opacities.repeat(repeats**2)
         print("Number of Gaussians:", len(means))
+        
+        conf = confidence_values({"conf_alpha": conf_alpha, "conf_beta": conf_beta})
+        conf_np = conf.detach().cpu().numpy()
+        colormap = cm.get_cmap("viridis")
+        conf_rgb_np = colormap(conf_np)[:, :3]
+        conf_rgb = torch.tensor(conf_rgb_np, dtype=torch.float32, device=device)
+        conf_rgb = conf_rgb[None, ...].expand(1, -1, -1)
 
     # register and open viewer
     @torch.no_grad()
@@ -175,6 +192,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
             rasterization_fn = rasterization_inria_wrapper
         else:
             raise ValueError
+        
+        if not hasattr(viewer_render_fn, "show_confidence"):
+            viewer_render_fn.show_confidence = False
 
         render_colors, render_alphas, meta = rasterization_fn(
             means,  # [N, 3]
@@ -191,8 +211,16 @@ def main(local_rank: int, world_rank, world_size: int, args):
             # this is to speedup large-scale rendering by skipping far-away Gaussians.
             radius_clip=3,
         )
-        render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
-        return render_rgbs
+        if viewer_render_fn.show_confidence:
+            render_colors_conf, _, _ = rasterization_fn(
+                means, quats, scales, opacities, conf_rgb,
+                viewmat[None], K[None], width, height,
+                render_mode="RGB",
+                radius_clip=3,
+            )
+            return render_colors_conf[0, ..., 0:3].cpu().numpy()
+
+        return render_colors[0, ..., 0:3].cpu().numpy()
 
     server = viser.ViserServer(port=args.port, verbose=False)
     _ = nerfview.Viewer(
@@ -200,6 +228,19 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_fn=viewer_render_fn,
         mode="rendering",
     )
+    
+    def toggle_confidence(event):
+        viewer_render_fn.show_confidence = not viewer_render_fn.show_confidence
+        print("Confidence View:", viewer_render_fn.show_confidence)
+        
+        # Trigger a forced render refresh by a tiny perturbation
+        cam = event.client.camera
+        pos = np.array(cam.position)
+        cam.position = (pos + np.random.normal(0, 1e-4, size=3))
+        
+    button_handler = server.gui.add_button("Toggle Confidence view")
+    button_handler.on_click(toggle_confidence)
+
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
 

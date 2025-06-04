@@ -1,10 +1,3 @@
-"""A simple example to render a (large-scale) Gaussian Splats
-
-```bash
-python examples/simple_viewer.py --scene_grid 13
-```
-"""
-
 import argparse
 import math
 import os
@@ -25,7 +18,6 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
 from confidence_utils import confidence_values
-
 
 def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
@@ -64,16 +56,15 @@ def main(local_rank: int, world_rank, world_size: int, args):
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
 
-        # batched render
         for _ in tqdm.trange(1):
             render_colors, render_alphas, meta = rasterization(
-                means,  # [N, 3]
-                quats,  # [N, 4]
-                scales,  # [N, 3]
-                opacities,  # [N]
-                colors,  # [N, S, 3]
-                viewmats,  # [C, 4, 4]
-                Ks,  # [C, 3, 3]
+                means,
+                quats,
+                scales,
+                opacities,
+                colors,
+                viewmats,
+                Ks,
                 width,
                 height,
                 render_mode="RGB+D",
@@ -89,7 +80,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_depths = render_colors[..., 3:4]
         render_depths = render_depths / render_depths.max()
 
-        # dump batch images
         os.makedirs(args.output_dir, exist_ok=True)
         canvas = (
             torch.cat(
@@ -108,10 +98,11 @@ def main(local_rank: int, world_rank, world_size: int, args):
             f"{args.output_dir}/render_rank{world_rank}.png",
             (canvas * 255).astype(np.uint8),
         )
+
     else:
         means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
         conf_alpha, conf_beta = [], []
-        
+
         for ckpt_path in args.ckpt:
             ckpt = torch.load(ckpt_path, map_location=device)["splats"]
             means.append(ckpt["means"])
@@ -122,7 +113,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             shN.append(ckpt["shN"])
             conf_alpha.append(ckpt["conf_alpha"])
             conf_beta.append(ckpt["conf_beta"])
-            
+
         means = torch.cat(means, dim=0)
         quats = torch.cat(quats, dim=0)
         scales = torch.cat(scales, dim=0)
@@ -134,139 +125,123 @@ def main(local_rank: int, world_rank, world_size: int, args):
         conf_alpha = torch.cat(conf_alpha, dim=0)
         conf_beta = torch.cat(conf_beta, dim=0)
 
-        # # crop
-        # aabb = torch.tensor((-1.0, -1.0, -1.0, 1.0, 1.0, 0.7), device=device)
-        # edges = aabb[3:] - aabb[:3]
-        # sel = ((means >= aabb[:3]) & (means <= aabb[3:])).all(dim=-1)
-        # sel = torch.where(sel)[0]
-        # means, quats, scales, colors, opacities = (
-        #     means[sel],
-        #     quats[sel],
-        #     scales[sel],
-        #     colors[sel],
-        #     opacities[sel],
-        # )
-
-        # # repeat the scene into a grid (to mimic a large-scale setting)
-        # repeats = args.scene_grid
-        # gridx, gridy = torch.meshgrid(
-        #     [
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #     ],
-        #     indexing="ij",
-        # )
-        # grid = torch.stack([gridx, gridy, torch.zeros_like(gridx)], dim=-1).reshape(
-        #     -1, 3
-        # )
-        # means = means[None, :, :] + grid[:, None, :] * edges[None, None, :]
-        # means = means.reshape(-1, 3)
-        # quats = quats.repeat(repeats**2, 1)
-        # scales = scales.repeat(repeats**2, 1)
-        # colors = colors.repeat(repeats**2, 1, 1)
-        # opacities = opacities.repeat(repeats**2)
-        print("Number of Gaussians:", len(means))
-        
         conf = confidence_values({"conf_alpha": conf_alpha, "conf_beta": conf_beta})
-        conf_np = conf.detach().cpu().numpy()
-        colormap = cm.get_cmap("viridis")
-        conf_rgb_np = colormap(conf_np)[:, :3]
-        conf_rgb = torch.tensor(conf_rgb_np, dtype=torch.float32, device=device)
-        conf_rgb = conf_rgb[None, ...].expand(1, -1, -1)
 
-    # register and open viewer
-    @torch.no_grad()
-    def viewer_render_fn(camera_state: nerfview.CameraState, img_wh: Tuple[int, int]):
-        width, height = img_wh
-        c2w = camera_state.c2w
-        K = camera_state.get_K(img_wh)
-        c2w = torch.from_numpy(c2w).float().to(device)
-        K = torch.from_numpy(K).float().to(device)
-        viewmat = c2w.inverse()
+        @torch.no_grad()
+        def update_conf_view(threshold, use_conf_color=True):
+            mask = conf >= threshold
+            masked_idx = mask.nonzero(as_tuple=True)[0]
 
-        if args.backend == "gsplat":
-            rasterization_fn = rasterization
-        elif args.backend == "inria":
-            from gsplat import rasterization_inria_wrapper
+            if use_conf_color:
+                cmap = cm.get_cmap("viridis")
+                conf_rgb_np = cmap(conf[masked_idx].detach().cpu().numpy())[:, :3]
+                conf_rgb = torch.tensor(conf_rgb_np, dtype=torch.float32, device=device).unsqueeze(0)
+                return (
+                    means[masked_idx],
+                    quats[masked_idx],
+                    scales[masked_idx],
+                    opacities[masked_idx],
+                    conf_rgb.expand(1, -1, -1),  # [1, N, 3]
+                )
+            else:
+                # Directly slice the correct SH values
+                sh0_masked = sh0[masked_idx]
+                shN_masked = shN[masked_idx]
+                colors_masked = torch.cat([sh0_masked, shN_masked], dim=-2)
+                return (
+                    means[masked_idx],
+                    quats[masked_idx],
+                    scales[masked_idx],
+                    opacities[masked_idx],
+                    colors_masked, 
+                )
 
-            rasterization_fn = rasterization_inria_wrapper
-        else:
-            raise ValueError
-        
-        if not hasattr(viewer_render_fn, "show_confidence"):
-            viewer_render_fn.show_confidence = False
+        class ViewerRenderer:
+            def __init__(self):
+                self.show_confidence = False
+                self.threshold = 0.0
+                self.render_data = update_conf_view(self.threshold)
 
-        render_colors, render_alphas, meta = rasterization_fn(
-            means,  # [N, 3]
-            quats,  # [N, 4]
-            scales,  # [N, 3]
-            opacities,  # [N]
-            colors,  # [N, S, 3]
-            viewmat[None],  # [1, 4, 4]
-            K[None],  # [1, 3, 3]
-            width,
-            height,
-            sh_degree=sh_degree,
-            render_mode="RGB",
-            # this is to speedup large-scale rendering by skipping far-away Gaussians.
-            radius_clip=3,
+            def __call__(self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]):
+                width, height = img_wh
+                c2w = camera_state.c2w
+                K = camera_state.get_K(img_wh)
+                c2w = torch.from_numpy(c2w).float().to(device)
+                K = torch.from_numpy(K).float().to(device)
+                viewmat = c2w.inverse()
+
+                if args.backend == "gsplat":
+                    rasterization_fn = rasterization
+                elif args.backend == "inria":
+                    from gsplat import rasterization_inria_wrapper
+                    rasterization_fn = rasterization_inria_wrapper
+                else:
+                    raise ValueError
+
+                if self.show_confidence:
+                    m, q, s, o, c = self.render_data
+                    render_colors, _, _ = rasterization_fn(
+                        m, q, s, o, c,
+                        viewmat[None], K[None], width, height,
+                        render_mode="RGB", radius_clip=3,
+                    )
+                elif self.threshold > 0.0:
+                    m, q, s, o, c = update_conf_view(self.threshold, use_conf_color=False)
+                    render_colors, _, _ = rasterization_fn(
+                        m, q, s, o, c,
+                        viewmat[None], K[None], width, height,
+                        sh_degree=sh_degree,
+                        render_mode="RGB", radius_clip=3,
+                    )
+                else:
+                    render_colors, _, _ = rasterization_fn(
+                        means, quats, scales, opacities, colors,
+                        viewmat[None], K[None], width, height,
+                        sh_degree=sh_degree,
+                        render_mode="RGB", radius_clip=3,
+                    )
+                return render_colors[0, ..., :3].cpu().numpy()
+
+        viewer_render_fn = ViewerRenderer()
+
+        server = viser.ViserServer(port=args.port, verbose=False)
+        _ = nerfview.Viewer(server=server, render_fn=viewer_render_fn, mode="rendering")
+
+        def toggle_confidence(event):
+            viewer_render_fn.show_confidence = not viewer_render_fn.show_confidence
+            if viewer_render_fn.show_confidence:
+                viewer_render_fn.render_data = update_conf_view(viewer_render_fn.threshold)
+            print("Confidence View:", viewer_render_fn.show_confidence)
+            cam = event.client.camera
+            pos = np.array(cam.position)
+            cam.position = (pos + np.random.normal(0, 1e-4, size=3))
+
+        def update_threshold(event):
+            viewer_render_fn.threshold = event.target.value
+            viewer_render_fn.render_data = update_conf_view(viewer_render_fn.threshold, viewer_render_fn.show_confidence)
+            print("Updated threshold to", viewer_render_fn.threshold)
+            cam = event.client.camera
+            pos = np.array(cam.position)
+            cam.position = (pos + np.random.normal(0, 1e-4, size=3))
+
+        server.gui.add_button("Toggle Confidences' heatmap view").on_click(toggle_confidence)
+        conf_threshold_slider = server.gui.add_slider(
+            label="# Confidence Threshold",
+            min=0.0, max=1.0, step=0.05, initial_value=0.0,
+            marks=[(0.0, "0"), (0.5, "0.5"), (0.8, "0.8"), (1.0, "1")]
         )
-        if viewer_render_fn.show_confidence:
-            render_colors_conf, _, _ = rasterization_fn(
-                means, quats, scales, opacities, conf_rgb,
-                viewmat[None], K[None], width, height,
-                render_mode="RGB",
-                radius_clip=3,
-            )
-            return render_colors_conf[0, ..., 0:3].cpu().numpy()
+        conf_threshold_slider.on_update(update_threshold)
 
-        return render_colors[0, ..., 0:3].cpu().numpy()
-
-    server = viser.ViserServer(port=args.port, verbose=False)
-    _ = nerfview.Viewer(
-        server=server,
-        render_fn=viewer_render_fn,
-        mode="rendering",
-    )
-    
-    def toggle_confidence(event):
-        viewer_render_fn.show_confidence = not viewer_render_fn.show_confidence
-        print("Confidence View:", viewer_render_fn.show_confidence)
-        
-        # Trigger a forced render refresh by a tiny perturbation
-        cam = event.client.camera
-        pos = np.array(cam.position)
-        cam.position = (pos + np.random.normal(0, 1e-4, size=3))
-        
-    button_handler = server.gui.add_button("Toggle Confidence view")
-    button_handler.on_click(toggle_confidence)
-
-    print("Viewer running... Ctrl+C to exit.")
-    time.sleep(100000)
-
+        print("Viewer running... Ctrl+C to exit.")
+        time.sleep(100000)
 
 if __name__ == "__main__":
-    """
-    # Use single GPU to view the scene
-    CUDA_VISIBLE_DEVICES=0 python simple_viewer.py \
-        --ckpt results/garden/ckpts/ckpt_3499_rank0.pt results/garden/ckpts/ckpt_3499_rank1.pt \
-        --port 8081
-    """
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--output_dir", type=str, default="results/", help="where to dump outputs"
-    )
-    parser.add_argument(
-        "--scene_grid", type=int, default=1, help="repeat the scene into a grid of NxN"
-    )
-    parser.add_argument(
-        "--ckpt", type=str, nargs="+", default=None, help="path to the .pt file"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8080, help="port for the viewer server"
-    )
-    parser.add_argument("--backend", type=str, default="gsplat", help="gsplat, inria")
+    parser.add_argument("--output_dir", type=str, default="results/")
+    parser.add_argument("--scene_grid", type=int, default=1)
+    parser.add_argument("--ckpt", type=str, nargs="+", default=None)
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--backend", type=str, default="gsplat")
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
-
     cli(main, args, verbose=True)

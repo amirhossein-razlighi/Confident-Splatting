@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from pathlib import Path
-
+from tqdm import tqdm
 
 
 def variance_of_laplacian(image):
@@ -18,10 +18,16 @@ def extract_quality_frames(
     frame_count = 0
     saved_count = 0
 
+    pbar = tqdm()
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+        
+        frame_count += 1
+
+        pbar.update()
 
         if frame_count % frame_interval == 0:
             # Check image quality
@@ -34,13 +40,13 @@ def extract_quality_frames(
                 cv2.imwrite(output_path, frame)
                 saved_count += 1
 
-        frame_count += 1
+
 
     cap.release()
     print(f"Extracted {saved_count} quality frames")
 
 
 # Usage
-video_path = "Videos/Eiffel_Tower.m4v"
-output_dir = "frames_for_colmap"
-extract_quality_frames(video_path, output_dir, frame_interval=20, blur_threshold=100)
+video_path = "Videos/IRAN Takht-e Jamshid - Perspolis |   تخت جمشید.mp4"
+output_dir = "input"
+extract_quality_frames(video_path, output_dir, frame_interval=10, blur_threshold=100)

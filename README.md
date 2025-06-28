@@ -50,12 +50,15 @@ After the training ends, you can see the logs and results in your specified path
 For evaluating your scene, and applying different threhsolds on it automatically and generating plots (PSNR vs Num of Splats) and a csv file containing all metrics, you can simply do the following:
 
 ```bash
-python3 trainer.py mcmc --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores --ckpt {path_to_your_specific_checkpoint}
+python3 trainer.py {default | mcmc} --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores --ckpt {path_to_your_specific_checkpoint}
 ```
 It will produce logs (metrics) based on sweeping on the threhsold for confidence score in evaluation (test) mode and print the results. Also, in your `result-dir` you will see a new folder named `plots/` in which you can see plots of the quality-size trade-off and also a csv file containing all metrics and threhsolds. If you want to specify a cretain threshold value, you can do it by:
 ```bash
-python3 trainer.py mcmc --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores --ckpt {path_to_your_specific_checkpoint} --eval_conf_thresh {thresh}
+python3 trainer.py {default | mcmc} --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores --ckpt {path_to_your_specific_checkpoint} --eval_conf_thresh {thresh}
 ```
+
+> [!NOTE]  
+> You can use "default" for using based 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
 
 ## Visualization
 For visualizing the trained scene and watching the confidence scores heatmaps and change the threshold interactively and see the remaining splats, you can run the following command:

@@ -58,7 +58,7 @@ python3 trainer.py {default | mcmc} --data_dir {path_to_your_dataset} --result_d
 ```
 
 > [!NOTE]  
-> You can use "default" for using based 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
+> You can use "default" for using original 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
 
 ## Visualization
 For visualizing the trained scene and watching the confidence scores heatmaps and change the threshold interactively and see the remaining splats, you can run the following command:

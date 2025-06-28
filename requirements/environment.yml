@@ -1,4 +1,4 @@
-name: karimi_env
+name: confident_splatting
 channels:
   - pytorch
   - anaconda
@@ -279,4 +279,3 @@ dependencies:
       - torchvision==0.21.0+cu118
       - triton==3.2.0
       - typing-extensions==4.12.2
-prefix: /home/user01/anaconda3/envs/karimi_env

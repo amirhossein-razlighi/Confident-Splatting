@@ -32,7 +32,7 @@ Also, you can download the "Confident-Splatting" dataset scenes from [here](http
 ## Training
 For training a Confident-Splatting model (with learned confidence scores per-splat), you can run the following command:
 ```bash
-python3 trainer.py mcmc --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores
+python3 trainer.py {default | mcmc} --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores
 ```
 
 You can also specify the following arguments:
@@ -46,6 +46,9 @@ Where `rank-interval` is how frequently (in terms of epochs) should we do the __
 
 After the training ends, you can see the logs and results in your specified path. Also, there will be side-by-side renders of the images in `renders/` and a video rendered from the whole scene in `videos/`. Also your saved checkpoints will be stored in `ckpts/`. In the meanwhile, while the model is training, you can see the custom viewer for the gaussian splatting scene automatically openning in your browser.
 
+> [!NOTE]  
+> You can use "default" for using original 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
+
 ## Evaluation
 For evaluating your scene, and applying different threhsolds on it automatically and generating plots (PSNR vs Num of Splats) and a csv file containing all metrics, you can simply do the following:
 
@@ -56,9 +59,6 @@ It will produce logs (metrics) based on sweeping on the threhsold for confidence
 ```bash
 python3 trainer.py {default | mcmc} --data_dir {path_to_your_dataset} --result_dir {path_to_where_to_store_logs_and_results} --use_conf_scores --ckpt {path_to_your_specific_checkpoint} --eval_conf_thresh {thresh}
 ```
-
-> [!NOTE]  
-> You can use "default" for using original 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
 
 ## Visualization
 For visualizing the trained scene and watching the confidence scores heatmaps and change the threshold interactively and see the remaining splats, you can run the following command:

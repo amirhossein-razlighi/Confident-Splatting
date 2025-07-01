@@ -1,6 +1,6 @@
 # Confident Splatting
 
-The implementation and data for the paper ["Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions"](./)
+The implementation and data for the paper ["Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions"](https://arxiv.org/pdf/2506.22973)
 ## Environment Setup
 
 You can create your environment using conda or pip by the following commands.

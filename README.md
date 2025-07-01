@@ -28,7 +28,7 @@ You can also use the well-known datasets like Mip-NeRF-360, Tanks&Temples, ZipNe
 python3 datasets/download_dataset.py
 ```
 
-Also, you can download the "Confident-Splatting" dataset scenes from [Google Drive](https://drive.google.com/drive/folders/1jK7ENuUULUB6VdXWUrHIsFiXeQbfIrOq?usp=sharing) and also [HugginFace Datasets](https://huggingface.co/datasets/AmirHossein-razlighi/Confident_Splatting).
+Also, you can download the "Confident-Splatting" dataset scenes from [Google Drive](https://drive.google.com/drive/folders/1jK7ENuUULUB6VdXWUrHIsFiXeQbfIrOq?usp=sharing) and also [Huggingface(HF) Datasets](https://huggingface.co/datasets/AmirHossein-razlighi/Confident_Splatting).
 
 ## Training
 For training a Confident-Splatting model (with learned confidence scores per-splat), you can run the following command:

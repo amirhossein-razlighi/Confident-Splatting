@@ -1,13 +1,14 @@
 # Confident Splatting
-Official PyTorch implementation of "Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions" by [AmirHossein Razlighi](https://scholar.google.com/citations?user=JbQgt-QAAAAJ&hl=en), [Elaheh Badali](https://openreview.net/profile?id=~Elaheh_Badali_Golezani1) , [Shohreh Kasaei](https://scholar.google.com/citations?user=mvx4PvgAAAAJ&hl=en)
+Official PyTorch implementation of ["Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions"](https://arxiv.org/pdf/2506.22973) 
+
+By [AmirHossein Razlighi](https://scholar.google.com/citations?user=JbQgt-QAAAAJ&hl=en), [Elaheh Badali](https://openreview.net/profile?id=~Elaheh_Badali_Golezani1) , [Shohreh Kasaei](https://scholar.google.com/citations?user=mvx4PvgAAAAJ&hl=en)
 
 3D Gaussian Splatting enables high-quality real-time rendering but often produces millions of splats, resulting in excessive storage and computational overhead. We propose a novel lossy compression method based on learnable confidence scores modeled as Beta distributions. Each splat's confidence is optimized through reconstruction-aware losses, enabling pruning of low-confidence splats while preserving visual fidelity. The proposed approach is architecture-agnostic and can be applied to any Gaussian Splatting variant. In addition, the average confidence values serve as a new metric to assess the quality of the scene. Extensive experiments demonstrate favorable trade-offs between compression and fidelity compared to prior work.
 
 <p align="center">
-<img src="" alt="Main method overview"/>
+<img src="static/Overall_View.png" alt="Main method overview"/>
 </p>
 
-The implementation and data for the paper ["Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions"](https://arxiv.org/pdf/2506.22973)
 ## Environment Setup
 
 You can create your environment using conda or pip by the following commands.

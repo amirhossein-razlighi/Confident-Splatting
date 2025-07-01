@@ -58,6 +58,9 @@ After the training ends, you can see the logs and results in your specified path
 > [!NOTE]  
 > You can use "default" for using original 3dgs method or "mcmc" for using MCMC method. Or you can even implement and use your own method, simply by calling its name (after implementing it)! Confident Splatting will work on it with no change in your main pipeline.
 
+> [!IMPORTANT]  
+> You can use [HuggingFace (HF) models](https://huggingface.co/AmirHossein-razlighi/confident-splatting/tree/main) to load and use some of the trained models (checkpoints) of confident-splatting on different scenes.
+
 ## Evaluation
 For evaluating your scene, and applying different threhsolds on it automatically and generating plots (PSNR vs Num of Splats) and a csv file containing all metrics, you can simply do the following:
 

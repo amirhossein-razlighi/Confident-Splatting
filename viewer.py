@@ -132,6 +132,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         def update_conf_view(threshold, use_conf_color=True):
             mask = conf >= threshold
             masked_idx = mask.nonzero(as_tuple=True)[0]
+            print(f"Number of Gaussians after prunning with confidence is: {len(masked_idx):,}; Threshold is: {threshold}")
 
             if use_conf_color:
                 cmap = cm.get_cmap("viridis")

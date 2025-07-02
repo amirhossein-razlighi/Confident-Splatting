@@ -6,26 +6,25 @@ base_path = "results"
 subdir_name = "with_conf_bayesian"
 csv_filename = "compression_curve_val.csv"
 
-all_data = []
-
-# Loop through each scene directory
-for scene_name in os.listdir(base_path):
-    scene_path = os.path.join(base_path, scene_name)
-    if not os.path.isdir(scene_path):
-        continue
-
-    csv_path = os.path.join(scene_path, subdir_name, "plots", csv_filename)
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
-        df["scene"] = scene_name
-        all_data.append(df)
-
-if all_data:
-    combined_df = pd.concat(all_data, ignore_index=True)
-
-    metrics = [("psnr", "PSNR ↑"), ("ssim", "SSIM ↑"), ("lpips", "LPIPS ↓")]
+def num_splats_vs_threshold(combined_df):
+    plt.figure(figsize=(16, 4))
     colors = plt.cm.get_cmap("tab20", len(combined_df["scene"].unique()))
+    
+    for idx, (scene, group) in enumerate(combined_df.groupby("scene")):
+        plt.plot(group["threshold"], group["num_splats"],
+                 label=scene, marker='o', linewidth=1.5, color=colors(idx), alpha=0.85)
 
+    plt.xlabel("Confidence Threshold")
+    plt.ylabel("# Splats Kept ↓")
+    plt.title("# Splats vs Confidence Threshold (on top of original 3DGS)")
+    plt.grid(True, linestyle=":")
+    plt.legend(title="Scene", bbox_to_anchor=(1.1, 1), loc='upper left')
+    plt.tight_layout()
+    
+    plt.savefig("results/summary_num_splats_vs_threshold_with_conf_bayesian.png", dpi=200)
+    plt.close()
+
+def summary_of_all_metrics_vs_thresh(combined_df, metrics, colors):
     for metric, ylabel in metrics:
         fig, ax1 = plt.subplots(figsize=(16, 4))
         ax2 = ax1.twinx()
@@ -47,24 +46,33 @@ if all_data:
         output_file = f"results/summary_{metric}_vs_threshold_with_conf_bayesian.png"
         plt.savefig(output_file, dpi=200)
         plt.close()
-    
-    plt.figure(figsize=(16, 4))
-    colors = plt.cm.get_cmap("tab20", len(combined_df["scene"].unique()))
-    
-    for idx, (scene, group) in enumerate(combined_df.groupby("scene")):
-        plt.plot(group["threshold"], group["num_splats"],
-                 label=scene, marker='o', linewidth=1.5, color=colors(idx), alpha=0.85)
 
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("# Splats Kept ↓")
-    plt.title("# Splats vs Confidence Threshold (on top of original 3DGS)")
-    plt.grid(True, linestyle=":")
-    plt.legend(title="Scene", bbox_to_anchor=(1.1, 1), loc='upper left')
-    plt.tight_layout()
-    
-    plt.savefig("results/summary_num_splats_vs_threshold_with_conf_bayesian.png", dpi=200)
-    plt.close()
+def main(base_path, subdir_name, csv_filename, num_splats_vs_threshold, summary_of_all_metrics_vs_thresh):
+    all_data = []
+    # Loop through each scene directory
+    for scene_name in os.listdir(base_path):
+        scene_path = os.path.join(base_path, scene_name)
+        if not os.path.isdir(scene_path):
+            continue
 
-    print("Plots saved successfully.")
-else:
-    print("No data found for with_conf_bayesian plots.")
+        csv_path = os.path.join(scene_path, subdir_name, "plots", csv_filename)
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            df["scene"] = scene_name
+            all_data.append(df)
+
+    if all_data:
+        combined_df = pd.concat(all_data, ignore_index=True)
+
+        metrics = [("psnr", "PSNR ↑"), ("ssim", "SSIM ↑"), ("lpips", "LPIPS ↓")]
+        colors = plt.cm.get_cmap("tab20", len(combined_df["scene"].unique()))
+
+        summary_of_all_metrics_vs_thresh(combined_df, metrics, colors)
+    
+        num_splats_vs_threshold(combined_df)
+
+        print("Plots saved successfully.")
+    else:
+        print("No data found for with_conf_bayesian plots.")
+
+main(base_path, subdir_name, csv_filename, num_splats_vs_threshold, summary_of_all_metrics_vs_thresh)

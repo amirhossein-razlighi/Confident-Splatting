@@ -40,7 +40,9 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
-from confidence_utils import confidence_values, confidence_values_with_gumbel_noise
+from plyfile import PlyData, PlyElement
+
+from confidence_utils import confidence_values, confidence_with_gumbel
 from eval_compression_helpers import evaluate_compression_curve
 
 @dataclass
@@ -180,6 +182,8 @@ class Config:
     rank_pairs: int = 2048
     
     beta_ent: float   = 2e-3      # weight for entropy penalty
+    
+    with_noise: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -480,6 +484,7 @@ class Runner:
         height: int,
         masks: Optional[Tensor] = None,
         splats_override: Optional[Tensor] = None,
+        eval_mode: bool = False,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         image_ids = kwargs.pop("image_ids", None)
@@ -570,7 +575,44 @@ class Runner:
 
             self.splats.register_buffer(name, buf, persistent=True)
 
+    # Experimental
+    def construct_list_of_attributes(self, splats):
+        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+        # All channels except the 3 DC
+        for i in range(splats["sh0"].shape[1]*splats["sh0"].shape[2]):
+            l.append('f_dc_{}'.format(i))
+        for i in range(splats["shN"].shape[1]*splats["shN"].shape[2]):
+            l.append('f_rest_{}'.format(i))
+        l.append('opacity')
+        for i in range(splats["scales"].shape[1]):
+            l.append('scale_{}'.format(i))
+        for i in range(splats["quats"].shape[1]):
+            l.append('rot_{}'.format(i))
+        return l
 
+    # Experimental
+    @torch.no_grad()
+    def save_ply(self, path):
+        print("Creating and storing ply file...")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        splats = self.splats_eval
+
+        xyz = splats["means"].detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = splats["sh0"].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = splats["shN"].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = splats["opacities"].detach().unsqueeze(-1).cpu().numpy()
+        scale = splats["scales"].detach().cpu().numpy()
+        rotation = splats["quats"].detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes(splats)]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+        
     def train(self):
         cfg = self.cfg
         device = self.device
@@ -973,12 +1015,12 @@ class Runner:
             keep = conf_vals > thresh
 
             print(f"[Eval] Pruning splats with conf ≤ {thresh:.2f}: "
-                f"{keep.sum().item():,} / {len(keep):,} remain.")
+                f"{keep.sum().item():,} / {len(keep):,} remain. ({keep.sum().item() / len(keep) * 100}%)")
 
             self.splats_eval = {
                 k: v.detach()[keep].to(self.device)
                 for k, v in self.splats.items()
-                }
+            }
         else:
             self.splats_eval = {k: v.detach().to(self.device) for k, v in self.splats.items()}
 
@@ -1006,7 +1048,8 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
-                splats_override=self.splats_eval
+                splats_override=self.splats_eval,
+                eval_mode=True
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
@@ -1043,10 +1086,17 @@ class Runner:
                     "num_GS": len(self.splats_eval["means"]),
                 }
             )
+            splats_memory_GB = sum(
+                v.numel() * v.element_size() for v in self.splats_eval.values()
+            ) / (1024 ** 3)
+            stats["splats_mem_GB"] = splats_memory_GB
             print(
-                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
-                f"Time: {stats['ellipse_time']:.3f}s/image "
-                f"Number of GS: {stats['num_GS']}"
+                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} | "
+                f"Time: {stats['ellipse_time']:.3f}s/image | "
+                f"Number of GS: {stats['num_GS']:,} | "
+                f"Memory: {stats['splats_mem_GB']:.2f} GB | "
+                f"SQR(1M): {stats['num_GS'] / (stats['num_GS'] + stats['psnr'] * 1e6)} | "
+                f"SQR(100K): {stats['num_GS'] / (stats['num_GS'] + stats['psnr'] * 1e5)} | "
             )
             # save stats as json
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
@@ -1125,6 +1175,8 @@ class Runner:
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
+            if i == 30:
+                imageio.imwrite(f"{video_dir}/img_{step}.png", canvas)
             writer.append_data(canvas)
         writer.close()
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
@@ -1202,7 +1254,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         step = ckpts[0]["step"]
         runner.eval(step=step)
         runner.eval(step=step, stage="val_compressed") if cfg.use_conf_scores else None
-        runner.render_traj(step=step, use_compression= cfg.use_conf_scores)
+        runner.save_ply(os.path.join(cfg.result_dir, "scene.ply"))
+        runner.render_traj(step=step+1, use_compression= cfg.use_conf_scores)
         _ = evaluate_compression_curve(runner,
                                thresholds=np.linspace(0,1.0,20),
                                save_dir=f"{cfg.result_dir}/plots",

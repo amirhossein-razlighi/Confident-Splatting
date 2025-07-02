@@ -118,6 +118,8 @@ def evaluate_compression_curve(runner, thresholds=None, save_dir="plots", stage=
             "threshold": thr,
             "num_splats": n_keep,
             "fraction": frac,
+            "custom_metric(1M)": (n_keep / (n_keep + stats['psnr'] * 1e6)),
+            "custom_metric(100K)": (n_keep / (n_keep + stats['psnr'] * 1e5)),
             **stats,
         })
         print(f"thr={thr:.2f}  num={n_keep:,}  PSNR={stats['psnr']:.3f}  SSIM={stats['ssim']:.3f}  LPIPS={stats['lpips']:.3f}")

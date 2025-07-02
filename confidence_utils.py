@@ -3,21 +3,32 @@ from torch import Tensor
 import torch.nn.functional as F
 from typing import Tuple
 
-def confidence_values_with_gumbel_noise(splats, conf_temperature) -> Tensor:
+def confidence_with_gumbel(splats, temperature: float = 2.0, seed: int = None) -> Tensor:
     """
-    Returns sigmoid(confs + conf_bias)  ∈  (0,1), shape [N].
+    Returns confidence values perturbed by Gumbel noise.
+    Args:
+        splats: dict with keys "conf_alpha" and "conf_beta"
+        temperature: scaling factor for Gumbel noise
+        seed: optional seed for reproducibility
+    Returns:
+        Tensor of shape [N], with Gumbel-perturbed confidence scores
     """
-    gumbel_noise = sample_gumbel(splats["confs"].shape, device="cuda")
-    scaled_logits = (splats["confs"] + gumbel_noise) / conf_temperature
-    conf_vals = torch.sigmoid(scaled_logits).squeeze(-1)
-    return conf_vals
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    alpha = F.softplus(splats["conf_alpha"]) + 1e-6
+    beta  = F.softplus(splats["conf_beta"]) + 1e-6
+    conf  = alpha / (alpha + beta)  # Expected confidence
+
+    # Add Gumbel noise
+    gumbel_noise = sample_gumbel(conf.shape, device=conf.device)
+    perturbed_conf = F.sigmoid(conf * gumbel_noise / temperature)
+    return perturbed_conf.squeeze(-1)
 
 def confidence_values(splats) -> Tensor:
     """
     Returns expected value of beta distribution -> alpha / (alpha + beta)
     """
-    # conf_logits = splats["confs"].squeeze(-1) + splats["conf_bias"].squeeze(-1)
-    # return torch.sigmoid(conf_logits)
     alpha = F.softplus(splats["conf_alpha"]) + 1e-6
     beta  = F.softplus(splats["conf_beta"]) + 1e-6
     conf  = alpha / (alpha + beta)  # Expected confidence

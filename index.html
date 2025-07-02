@@ -92,6 +92,41 @@
     .close-btn:hover {
       background-color: #ff3333;
     }
+
+    .dropdown-content {
+      display: none;
+      position: absolute;
+      background-color: #f9f9f9;
+      min-width: 160px;
+      box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.2);
+      z-index: 1;
+    }
+
+    .dropdown:hover .dropdown-content {
+      display: block;
+    }
+
+    .dropdown-item {
+      padding: 8px 16px;
+      text-decoration: none;
+      display: block;
+    }
+
+    .dropdown-item:hover {
+      background-color: #ddd;
+    }
+
+    /* Center the download dropdown */
+    .centered-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 20px;
+    }
+
+    .dropdown {
+      margin: 0;
+    }
   </style>
 </head>
 
@@ -155,14 +190,24 @@
       <div class="iframe-container">
         <!-- Overlay with instructions -->
         <div class="overlay" id="overlay">
-          <div>Drag and drop a <strong>.splat</strong> file here to view the scene.</div>
+          <div>Drag and drop a <strong style="color: white;">.splat</strong> file (from the "Download Model" below) here to view the scene.</div>
         </div>
         <iframe id="splatViewer" src="https://antimatter15.com/splat/" width="100%" height="100%" style="border:none;"></iframe>
       </div>
-      <p class="has-text-centered"><a href="https://amirhossein-razlighi.github.io/Confident-Splatting/static/splats/truck_model.splat" class="download-btn" download>Download truck_model.splat</a></p>
       <p class="has-text-centered">
         <button class="close-btn" id="closeOverlayBtn">Close Overlay</button>
       </p>
+
+      <!-- Dropdown for Download Options -->
+      <div class="centered-container">
+        <div class="dropdown">
+          <button class="button is-link">Download Model</button>
+          <div class="dropdown-content">
+            <a href="https://amirhossein-razlighi.github.io/Confident-Splatting/static/splats/truck_model.splat" class="dropdown-item" download>Download truck_model.splat</a>
+            <a href="https://amirhossein-razlighi.github.io/Confident-Splatting/static/splats/garden_model.splat" class="dropdown-item" download>Download garden_model.splat</a>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -236,7 +281,7 @@
     <div class="container content">
       <h2 class="title is-4">BibTeX</h2>
       <pre><code id="bibtex">@article{razlighi2025confident,
-  title={Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions},
+  title={Confident Splatting: Confidence‑Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions},
   author={Razlighi, AmirHossein and Badali, Elahe and Kasaei, Shohreh},
   journal={arXiv preprint arXiv:2506.22973},
   year={2025}

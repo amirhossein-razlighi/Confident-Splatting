@@ -9,6 +9,9 @@ By [AmirHossein Razlighi](https://scholar.google.com/citations?user=JbQgt-QAAAAJ
 <img src="static/Overall_View.png" alt="Main method overview"/>
 </p>
 
+> [!TIP]  
+> Please refer to the paper's [website](https://amirhossein-razlighi.github.io/Confident-Splatting/) for more details and interactive 3D visualization!
+
 ## Environment Setup
 
 You can create your environment using conda or pip by the following commands.

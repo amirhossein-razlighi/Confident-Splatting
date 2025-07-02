@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Confident Splatting: Confidence-Based Compression of 3D Gaussian Splatting">
+  <meta name="keywords" content="3DGS, Gaussian Splatting, Compression, Beta Distribution, Confidence Scores">
+  <title>Confident Splatting</title>
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/favicon.svg">
+  <style>
+    .image-compare-container {
+      position: relative;
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    .image-compare-container img {
+      width: 100%;
+      display: block;
+    }
+    #imageCompressed {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      clip-path: inset(0 0 50% 0);
+    }
+    #imageOriginal {
+      position: relative;
+      z-index: 0;
+    }
+    .slider-line {
+      position: absolute;
+      width: 100%;
+      height: 4px;
+      background: #00d1b2;
+      top: 50%;
+      left: 0;
+      z-index: 2;
+      cursor: row-resize;
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <!-- Hero -->
+  <section class="hero is-light">
+    <div class="hero-body">
+      <div class="container has-text-centered">
+        <h1 class="title is-1">Confident Splatting</h1>
+        <h2 class="subtitle is-4">Confidence-Based Compression of 3D Gaussian Splatting</h2>
+        <p><strong>AmirHossein Razlighi</strong>, Elahe Badali, Shohreh Kasaei<br><em>Sharif University of Technology</em></p>
+        <div class="buttons is-centered mt-4">
+          <a class="button is-dark is-rounded" href="https://arxiv.org/abs/2506.22973">📄 arXiv</a>
+          <a class="button is-dark is-rounded" href="https://github.com/amirhossein-razlighi/Confident-Splatting">💻 Code</a>
+          <a class="button is-link is-rounded" href="https://huggingface.co/datasets/AmirHossein-razlighi/Confident_Splatting">📂 HF Dataset</a>
+          <a class="button is-primary is-rounded" href="https://huggingface.co/AmirHossein-razlighi/confident-splatting">🧠 HF Model</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison Image -->
+  <section class="section">
+    <div class="container">
+      <h2 class="title is-3 has-text-centered">Before vs After Compression</h2>
+      <p class="has-text-centered">Drag the line: Up = original, Down = compressed</p>
+      <div class="image-compare-container" id="compareContainer">
+        <img id="imageOriginal" src="./static/images/garden_uncompressed.png" alt="Original">
+        <img id="imageCompressed" src="./static/images/garden_compressed.png" alt="Compressed">
+        <div class="slider-line" id="sliderLine"></div>
+      </div>
+      <p class="has-text-centered">Visual fidelity preserved—even after halving splats.</p>
+    </div>
+  </section>
+
+  <!-- Video Comparison -->
+  <section class="section">
+    <div class="container">
+      <h2 class="title is-3 has-text-centered">Garden Scene Playback</h2>
+      <div class="columns">
+        <div class="column">
+          <video id="vidOrig" width="100%" src="./static/videos/traj_garden.mp4" controls muted></video>
+          <p class="has-text-centered">Original</p>
+        </div>
+        <div class="column">
+          <video id="vidComp" width="100%" src="./static/videos/traj_garden_conf.mp4" controls muted></video>
+          <p class="has-text-centered">Compressed</p>
+        </div>
+      </div>
+      <div class="has-text-centered">
+        <button class="button is-info" onclick="syncPlay()">▶ Play Both</button>
+        <button class="button is-link" onclick="syncPause()">⏸ Pause Both</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3D Viewer -->
+  <section class="section">
+    <div class="container">
+      <h2 class="title is-3 has-text-centered">Interactive 3D Viewer</h2>
+      <iframe 
+        src="https://antimatter15.com/splat/" 
+        width="100%" 
+        height="600px" 
+        style="border:none;">
+      </iframe>
+    </div>
+  </section>
+
+  <!-- Key Contributions -->
+  <section class="section"><div class="container content">
+    <h2 class="title is-3 has-text-centered">Key Contributions</h2>
+    <ul>
+      <li>Confidence scoring per splat via Beta distributions.</li>
+      <li>Lossy pruning with strong compression–fidelity trade-off.</li>
+      <li>Architecture-agnostic — plugs into any Gaussian Splatting pipeline.</li>
+      <li>Proposes average confidence as a new scene quality metric.</li>
+    </ul>
+  </div></section>
+
+  <!-- Quantitative Results -->
+  <section class="section"><div class="container">
+    <h2 class="title is-3 has-text-centered">Quantitative Results</h2>
+    <table class="table is-striped is-fullwidth">
+      <thead><tr><th>Scene</th><th>PSNR ↓</th><th>SSIM ↓</th><th>LPIPS ↑</th><th># Splats ↓</th></tr></thead>
+      <tbody>
+        <tr><td>Garden</td><td>27.15 → 27.13</td><td>0.857 → 0.856</td><td>0.0814 → 0.0816</td><td>6.5M → 3.2M</td></tr>
+        <tr><td>Statue</td><td>21.29 → 21.25</td><td>0.782 → 0.778</td><td>0.189 → 0.192</td><td>1.2M → 734K</td></tr>
+        <tr><td>Flowers</td><td>21.45 → 21.38</td><td>0.596 → 0.590</td><td>0.345 → 0.360</td><td>3.59M → 2.22M</td></tr>
+      </tbody>
+    </table>
+    <p class="has-text-centered">See the paper for full evaluations and ablations.</p>
+  </div></section>
+
+  <!-- Abstract -->
+  <section class="section"><div class="container content">
+    <h2 class="title is-3 has-text-centered">Abstract</h2>
+    <p>
+      3D Gaussian Splatting enables high-quality real-time rendering but often produces millions of splats, resulting in excessive storage and computational overhead. We propose a novel lossy compression method based on learnable confidence scores modeled as Beta distributions. Each splat's confidence is optimized through reconstruction‑aware losses, enabling pruning of low‑confidence splats while preserving visual fidelity. The proposed approach is architecture‑agnostic and can be applied to any Gaussian Splatting variant. In addition, the average confidence values serve as a new metric to assess the quality of the scene. Extensive experiments demonstrate favorable trade‑offs between compression and fidelity compared to prior work.
+    </p>
+  </div></section>
+
+  <!-- BibTeX -->
+  <section class="section" id="BibTeX"><div class="container content">
+    <h2 class="title is-4">BibTeX</h2>
+    <pre><code id="bibtex">@article{razlighi2025confident,
+  title={Confident Splatting: Confidence‑Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions},
+  author={Razlighi, AmirHossein and Badali, Elahe and Kasaei, Shohreh},
+  journal={arXiv preprint arXiv:2506.22973},
+  year={2025}
+}</code></pre>
+    <button onclick="copyBibTeX()" class="button is-small is-link">📋 Copy BibTeX</button>
+  </div></section>
+
+  <footer class="footer">
+    <div class="content has-text-centered">
+      <p>Site adapted from <a href="https://nerfies.github.io">Nerfies</a> template by AmirHossein Razlighi.</p>
+    </div>
+  </footer>
+
+<script>
+  const container = document.getElementById('compareContainer');
+  const compressed = document.getElementById('imageCompressed');
+  const slider = document.getElementById('sliderLine');
+  let isDragging = false;
+  slider.addEventListener('mousedown', () => isDragging = true);
+  window.addEventListener('mouseup', () => isDragging = false);
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const rect = container.getBoundingClientRect();
+    let offsetY = e.clientY - rect.top;
+    offsetY = Math.max(0, Math.min(offsetY, rect.height));
+    const percent = offsetY / rect.height * 100;
+    compressed.style.clipPath = `inset(${percent}% 0 0 0)`;
+    slider.style.top = `${percent}%`;
+  });
+
+  function syncPlay() {
+    const o = document.getElementById('vidOrig');
+    const c = document.getElementById('vidComp');
+    o.currentTime = c.currentTime = 0;
+    o.play();
+    c.play();
+  }
+  function syncPause() {
+    document.getElementById('vidOrig').pause();
+    document.getElementById('vidComp').pause();
+  }
+  function copyBibTeX() {
+    navigator.clipboard.writeText(document.getElementById("bibtex").innerText).then(() => {
+      alert("BibTeX copied!");
+    });
+  }
+</script>
+</body>
+</html>

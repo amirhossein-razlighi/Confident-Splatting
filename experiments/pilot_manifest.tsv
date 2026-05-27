@@ -1,0 +1,3 @@
+scene	variant	config	data_dir	result_dir	extra_args
+BigBen_Scene	default_vanilla	default	/scratch/amirrz/datasets/Confident_Splatting/BigBen_Scene	/scratch/amirrz/results/confident_splatting_review/BigBen_Scene/default_vanilla	
+BigBen_Scene	default_full_beta	default	/scratch/amirrz/datasets/Confident_Splatting/BigBen_Scene	/scratch/amirrz/results/confident_splatting_review/BigBen_Scene/default_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0

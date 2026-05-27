@@ -42,8 +42,8 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 from plyfile import PlyData, PlyElement
 
-from confidence_utils import confidence_values, confidence_with_gumbel
-from eval_compression_helpers import evaluate_compression_curve
+from confidence_utils import beta_entropy, confidence_values, confidence_with_gumbel
+from eval_compression_helpers import evaluate_compression_curve, evaluate_pruning_curves
 
 @dataclass
 class Config:
@@ -168,6 +168,8 @@ class Config:
 
     # Whether to use confidence scores or not
     use_conf_scores: bool = False
+    # Confidence parameterization used when use_conf_scores is enabled.
+    confidence_mode: Literal["beta", "scalar"] = "beta"
 
     # The multiplier (lambda) for sparsity_loss
     lambda_sparsity: float = 2e-3
@@ -180,8 +182,38 @@ class Config:
     
     rank_interval: int = 25
     rank_pairs: int = 2048
+    rank_weight: float = 1.0
+    rank_start_step: int = 1000
     
-    beta_ent: float   = 2e-3      # weight for entropy penalty
+    beta_ent: float = 2e-3
+    beta_entropy_sign: Literal["minimize", "maximize"] = "minimize"
+
+    # Reviewer-facing pruning sweeps. Thresholds expose sensitivity to the
+    # user knob; fractions make all methods comparable at the same budget.
+    eval_curve_thresholds: List[float] = field(
+        default_factory=lambda: [
+            0.0,
+            0.05,
+            0.10,
+            0.15,
+            0.20,
+            0.30,
+            0.40,
+            0.50,
+            0.60,
+            0.70,
+            0.80,
+            0.90,
+        ]
+    )
+    eval_curve_fractions: List[float] = field(
+        default_factory=lambda: [1.0, 0.75, 0.50, 0.35, 0.25, 0.15, 0.10, 0.05]
+    )
+    eval_pruning_selectors: List[Literal["confidence", "opacity", "random"]] = field(
+        default_factory=lambda: ["confidence", "opacity", "random"]
+    )
+    eval_random_trials: int = 3
+    skip_render_traj: bool = False
     
     with_noise: bool = False
 
@@ -218,6 +250,8 @@ def create_splats_with_optimizers(
     visible_adam: bool = False,
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
+    use_conf_scores: bool = False,
+    confidence_mode: Literal["beta", "scalar"] = "beta",
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
@@ -251,11 +285,20 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        # ("confs", torch.nn.Parameter(torch.full((points.shape[0], 1), 0.0)), 1e-3),
-        # ("conf_bias", torch.nn.Parameter(torch.zeros(points.shape[0], 1)), 1e-3),
-        ("conf_alpha", torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
-        ("conf_beta",  torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
     ]
+
+    if use_conf_scores:
+        if confidence_mode == "beta":
+            params.extend(
+                [
+                    ("conf_alpha", torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
+                    ("conf_beta", torch.nn.Parameter(torch.ones(N, 1)), 1e-3),
+                ]
+            )
+        elif confidence_mode == "scalar":
+            params.append(("conf_logit", torch.nn.Parameter(torch.zeros(N, 1)), 1e-3))
+        else:
+            raise ValueError(f"Unknown confidence mode: {confidence_mode}")
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -355,6 +398,8 @@ class Runner:
             visible_adam=cfg.visible_adam,
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
+            use_conf_scores=cfg.use_conf_scores,
+            confidence_mode=cfg.confidence_mode,
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
@@ -754,34 +799,39 @@ class Runner:
             ssimloss = 1.0 - self.ssim(colors_p, pixels_p)
             recon_loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             loss = recon_loss
+            sparsity_loss = None
+            entropy_loss = None
+            loss_rank = None
             
             if cfg.use_conf_scores and step % cfg.conf_update_interval == 0:
                 conf_vals = confidence_values(self.splats)
                 sparsity_loss = (conf_vals).mean()
                 loss += cfg.lambda_sparsity * sparsity_loss
                 
-                # ── entropy penalty ──────────────────────────────────────────
-                if cfg.beta_ent > 0:
-                    beta_dist = torch.distributions.Beta(F.softplus(self.splats["conf_alpha"]) + 1e-6,  
-                                                         F.softplus(self.splats["conf_beta"]) + 1e-6)
-                    entropy = beta_dist.entropy().mean()
-                    loss += cfg.beta_ent * entropy
+                if cfg.beta_ent > 0 and cfg.confidence_mode == "beta":
+                    entropy = beta_entropy(self.splats)
+                    entropy_loss = entropy
+                    if cfg.beta_entropy_sign == "maximize":
+                        loss -= cfg.beta_ent * entropy
+                    else:
+                        loss += cfg.beta_ent * entropy
 
-                #     eps = 1e-6
-                #     ent = -(conf_vals*torch.log(conf_vals+eps) +
-                #             (1-conf_vals)*torch.log(1-conf_vals+eps)).mean()
-                    
-                #     # ent = (-0.5 * (torch.log(conf_vals+eps) + # It's actually KL!
-                #     #     torch.log1p(-conf_vals+eps))).mean()
-                #     loss += cfg.beta_ent * ent
-
-            if step % cfg.rank_interval == 0:
+            if (
+                cfg.use_conf_scores
+                and cfg.rank_weight > 0
+                and cfg.rank_interval > 0
+                and step >= cfg.rank_start_step
+                and step % cfg.rank_interval == 0
+            ):
                 s = self.splats.saliency.detach()
                 c = confidence_values(self.splats)
-                hi, lo = torch.topk(s, cfg.rank_pairs)[1], torch.topk(-s, cfg.rank_pairs)[1]
-                loss_rank = F.relu(1.0 + c[lo] - c[hi]).mean()
+                num_pairs = min(cfg.rank_pairs, s.numel())
+                if num_pairs > 0 and torch.count_nonzero(s).item() > 0:
+                    hi = torch.topk(s, num_pairs)[1]
+                    lo = torch.topk(-s, num_pairs)[1]
+                    loss_rank = F.relu(1.0 + c[lo] - c[hi]).mean()
+                    loss = loss + cfg.rank_weight * loss_rank
                 self.splats.saliency.zero_()
-                loss = loss + loss_rank
 
             if cfg.depth_loss:
                 # query depths from depth map
@@ -837,7 +887,8 @@ class Runner:
                         grad_src = torch.cat([grad0, gradN], dim=1)         # [N,K,3]
 
                 if grad_src is not None:
-                    sal = grad_src.abs().mean(dim=(1,2))    # [N]  L1 saliency per splat
+                    sal_dims = tuple(range(1, grad_src.ndim))
+                    sal = grad_src.abs().mean(dim=sal_dims)  # [N] L1 saliency per splat
                     self.splats.saliency.add_(sal)
 
 
@@ -864,13 +915,21 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                self.writer.add_scalar("train/recon_loss", recon_loss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 
                 if cfg.use_conf_scores and step % cfg.tb_every == 0:
-                    self.writer.add_scalar("train/avg_conf",  self.avg_conf,   step)
-                    self.writer.add_scalar("train/active50%", self.num_active, step)
-                    # self.writer.add_scalar("train/entropy", ent.item(), step)
+                    conf_for_log = confidence_values(self.splats).detach()
+                    self.writer.add_scalar("train/avg_conf", conf_for_log.mean().item(), step)
+                    self.writer.add_scalar("train/std_conf", conf_for_log.std().item(), step)
+                    self.writer.add_scalar("train/active50%", (conf_for_log > 0.5).sum().item(), step)
+                    if sparsity_loss is not None:
+                        self.writer.add_scalar("loss/sparsity", sparsity_loss.item(), step)
+                    if entropy_loss is not None:
+                        self.writer.add_scalar("loss/beta_entropy", entropy_loss.item(), step)
+                    if loss_rank is not None:
+                        self.writer.add_scalar("loss/ranking", loss_rank.item(), step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:
@@ -1090,6 +1149,14 @@ class Runner:
                 v.numel() * v.element_size() for v in self.splats_eval.values()
             ) / (1024 ** 3)
             stats["splats_mem_GB"] = splats_memory_GB
+            confidence_keys = {"conf_alpha", "conf_beta", "conf_logit"}
+            confidence_memory_GB = sum(
+                v.numel() * v.element_size()
+                for k, v in self.splats_eval.items()
+                if k in confidence_keys
+            ) / (1024 ** 3)
+            stats["confidence_mem_GB"] = confidence_memory_GB
+            stats["render_mem_GB"] = splats_memory_GB - confidence_memory_GB
             print(
                 f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} | "
                 f"Time: {stats['ellipse_time']:.3f}s/image | "
@@ -1186,14 +1253,15 @@ class Runner:
         """Entry for running compression."""
         print("Running compression...")
         world_rank = self.world_rank
+        cfg = self.cfg
         
         if self.cfg.use_conf_scores:
             conf = confidence_values(self.splats)
-            THRESH = 0.1
-            keep = conf > THRESH
+            thresh = cfg.eval_conf_thresh
+            keep = conf > thresh
             
             print(f"Pruning for compression: kept {keep.sum().item()} / {len(keep)} splats "
-                  f"(threshold={THRESH:.2f})")
+                  f"(threshold={thresh:.2f})")
             
             splats_pruned = {
                 k: v.detach()[keep].cpu()           #   tensors only
@@ -1255,11 +1323,17 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         runner.eval(step=step)
         runner.eval(step=step, stage="val_compressed") if cfg.use_conf_scores else None
         runner.save_ply(os.path.join(cfg.result_dir, "scene.ply"))
-        runner.render_traj(step=step+1, use_compression= cfg.use_conf_scores)
-        _ = evaluate_compression_curve(runner,
-                               thresholds=np.linspace(0,1.0,20),
-                               save_dir=f"{cfg.result_dir}/plots",
-                               stage="val")
+        if not cfg.skip_render_traj:
+            runner.render_traj(step=step + 1, use_compression=cfg.use_conf_scores)
+        _ = evaluate_pruning_curves(
+            runner,
+            thresholds=cfg.eval_curve_thresholds,
+            keep_fractions=cfg.eval_curve_fractions,
+            selectors=cfg.eval_pruning_selectors,
+            random_trials=cfg.eval_random_trials,
+            save_dir=f"{cfg.result_dir}/plots",
+            stage="val",
+        )
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:

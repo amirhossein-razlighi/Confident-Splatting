@@ -1,0 +1,54 @@
+[project]
+name = "confident-splatting"
+version = "0.1.0"
+description = "Confidence-Based Compression of 3D Gaussian Splatting via Learnable Beta Distributions"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "filelock==3.13.1",
+    "fsspec==2024.6.1",
+    "gsplat",
+    "imageio[ffmpeg]",
+    "jinja2==3.1.4",
+    "kornia==0.8.0",
+    "kornia-rs==0.1.8",
+    "matplotlib==3.9.1",
+    "mkl-service==2.4.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "mpmath==1.3.0",
+    "networkx==3.3",
+    "numpy<2.0.0",
+    "opencv-python==4.7.0.72",
+    "pandas>=2.2.0",
+    "pillow",
+    "plotly",
+    "ply==3.11",
+    "plyfile",
+    "protobuf==4.21.12",
+    "pycolmap",
+    "pyqt5==5.15.10",
+    "pyyaml",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "tensorboard",
+    "tensorly",
+    "torch==2.4.0+cu121",
+    "torchmetrics[image]",
+    "torchvision==0.19.0+cu121",
+    "tqdm",
+    "tyro>=0.8.8",
+    "typing-extensions==4.12.2",
+    "viser",
+    "nerfview==0.0.2",
+]
+
+[tool.uv.sources]
+gsplat = { url = "https://github.com/nerfstudio-project/gsplat/releases/download/v1.4.0/gsplat-1.4.0%2Bpt24cu121-cp310-cp310-linux_x86_64.whl" }
+pycolmap = { git = "https://github.com/rmbrualla/pycolmap", rev = "cc7ea4b7301720ac29287dbe450952511b32125e" }
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true

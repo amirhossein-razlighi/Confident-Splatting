@@ -14,7 +14,13 @@ By [AmirHossein Razlighi](https://scholar.google.com/citations?user=JbQgt-QAAAAJ
 
 ## Environment Setup
 
-You can create your environment using conda or pip by the following commands.
+You can create your environment using uv, conda, or pip by the following commands.
+
+For uv:
+```bash
+uv venv ./.venv --python 3.10.9
+uv sync
+```
 
 For conda:
 ```bash

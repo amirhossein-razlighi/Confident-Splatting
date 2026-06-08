@@ -1,0 +1,7 @@
+scene	variant	config	data_dir	result_dir	extra_args
+bicycle	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/bicycle	/scratch/amirrz/results/cs_resubmit/bicycle/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+treehill	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/treehill	/scratch/amirrz/results/cs_resubmit/treehill/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+flowers	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/flowers	/scratch/amirrz/results/cs_resubmit/flowers/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+room	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/room	/scratch/amirrz/results/cs_resubmit/room/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+counter	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/counter	/scratch/amirrz/results/cs_resubmit/counter/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+bonsai	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/bonsai	/scratch/amirrz/results/cs_resubmit/bonsai/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0

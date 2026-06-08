@@ -1,0 +1,19 @@
+scene	variant	config	data_dir	result_dir	extra_args
+garden	mcmc_vanilla	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_vanilla	
+garden	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+garden	mcmc_no_sparsity	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_no_sparsity	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.0 --beta-ent 0.002 --rank-weight 1.0
+garden	mcmc_no_entropy	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_no_entropy	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0
+garden	mcmc_no_ranking	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_no_ranking	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 0.0
+garden	mcmc_scalar_conf	mcmc	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/mcmc_scalar_conf	--use-conf-scores --confidence-mode scalar --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0
+kitchen	mcmc_vanilla	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_vanilla	
+kitchen	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+kitchen	mcmc_no_sparsity	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_no_sparsity	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.0 --beta-ent 0.002 --rank-weight 1.0
+kitchen	mcmc_no_entropy	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_no_entropy	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0
+kitchen	mcmc_no_ranking	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_no_ranking	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 0.0
+kitchen	mcmc_scalar_conf	mcmc	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/mcmc_scalar_conf	--use-conf-scores --confidence-mode scalar --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0
+stump	mcmc_vanilla	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_vanilla	
+stump	mcmc_full_beta	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+stump	mcmc_no_sparsity	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_no_sparsity	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.0 --beta-ent 0.002 --rank-weight 1.0
+stump	mcmc_no_entropy	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_no_entropy	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0
+stump	mcmc_no_ranking	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_no_ranking	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 0.0
+stump	mcmc_scalar_conf	mcmc	/scratch/amirrz/datasets/mipnerf360/stump	/scratch/amirrz/results/cs_resubmit/stump/mcmc_scalar_conf	--use-conf-scores --confidence-mode scalar --lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0

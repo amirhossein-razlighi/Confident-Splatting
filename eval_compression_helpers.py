@@ -58,6 +58,14 @@ def _selector_scores(runner, selector: str, seed: int = 0) -> torch.Tensor:
     device = runner.device
     if selector == "confidence":
         return confidence_values(splats).detach().to(device)
+    if selector == "effective_opacity":
+        # opacity * confidence: the quantity that determines rendering contribution
+        opa = torch.sigmoid(splats["opacities"]).detach().to(device)
+        try:
+            conf = confidence_values(splats).detach().to(device)
+        except KeyError:
+            conf = torch.ones_like(opa)
+        return opa * conf
     if selector == "opacity":
         return torch.sigmoid(splats["opacities"]).detach().to(device)
     if selector == "random":
@@ -235,10 +243,10 @@ def evaluate_pruning_curves(
     keep_fractions = list(
         keep_fractions if keep_fractions is not None else [1.0, 0.75, 0.5, 0.25, 0.1]
     )
-    selectors = list(selectors if selectors is not None else ["confidence", "opacity", "random"])
+    selectors = list(selectors if selectors is not None else ["confidence", "effective_opacity", "opacity", "random"])
 
     if not runner.cfg.use_conf_scores:
-        selectors = [s for s in selectors if s != "confidence"]
+        selectors = [s for s in selectors if s not in ("confidence", "effective_opacity")]
 
     base_splats = {k: v.detach() for k, v in runner.splats.items() if torch.is_tensor(v)}
     base_stats = _render_dataset(runner, base_splats, stage=stage)
@@ -249,7 +257,7 @@ def evaluate_pruning_curves(
         for trial in range(trials):
             scores = _selector_scores(runner, selector, seed=trial)
 
-            if selector in {"confidence", "opacity"}:
+            if selector in {"confidence", "effective_opacity", "opacity"}:
                 for threshold in thresholds:
                     keep = _threshold_mask(scores, threshold)
                     rows.append(

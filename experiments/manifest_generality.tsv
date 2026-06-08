@@ -1,0 +1,5 @@
+scene	variant	config	data_dir	result_dir	extra_args
+garden	default_vanilla	default	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/default_vanilla	
+garden	default_full_beta	default	/scratch/amirrz/datasets/mipnerf360/garden	/scratch/amirrz/results/cs_resubmit/garden/default_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0
+kitchen	default_vanilla	default	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/default_vanilla	
+kitchen	default_full_beta	default	/scratch/amirrz/datasets/mipnerf360/kitchen	/scratch/amirrz/results/cs_resubmit/kitchen/default_full_beta	--use-conf-scores --confidence-mode beta --lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0

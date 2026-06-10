@@ -8,7 +8,7 @@ VARIANTS = {
     "vanilla": "",
     "full_beta": (
         "--use-conf-scores --confidence-mode beta "
-        "--lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 1.0"
+        "--lambda-sparsity 0.01 --beta-ent 0.002 --rank-weight 1.0"
     ),
     "no_sparsity": (
         "--use-conf-scores --confidence-mode beta "
@@ -16,15 +16,15 @@ VARIANTS = {
     ),
     "no_entropy": (
         "--use-conf-scores --confidence-mode beta "
-        "--lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0"
+        "--lambda-sparsity 0.01 --beta-ent 0.0 --rank-weight 1.0"
     ),
     "no_ranking": (
         "--use-conf-scores --confidence-mode beta "
-        "--lambda-sparsity 0.002 --beta-ent 0.002 --rank-weight 0.0"
+        "--lambda-sparsity 0.01 --beta-ent 0.002 --rank-weight 0.0"
     ),
     "scalar_conf": (
         "--use-conf-scores --confidence-mode scalar "
-        "--lambda-sparsity 0.002 --beta-ent 0.0 --rank-weight 1.0"
+        "--lambda-sparsity 0.01 --beta-ent 0.0 --rank-weight 1.0"
     ),
 }
 

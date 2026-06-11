@@ -183,6 +183,7 @@ class Config:
     rank_interval: int = 25
     rank_pairs: int = 2048
     rank_weight: float = 1.0
+    rank_margin: float = 1.0
     rank_start_step: int = 1000
     
     beta_ent: float = 2e-3
@@ -829,7 +830,7 @@ class Runner:
                 if num_pairs > 0 and torch.count_nonzero(s).item() > 0:
                     hi = torch.topk(s, num_pairs)[1]
                     lo = torch.topk(-s, num_pairs)[1]
-                    loss_rank = F.relu(1.0 + c[lo] - c[hi]).mean()
+                    loss_rank = F.relu(cfg.rank_margin + c[lo] - c[hi]).mean()
                     loss = loss + cfg.rank_weight * loss_rank
                 self.splats.saliency.zero_()
 

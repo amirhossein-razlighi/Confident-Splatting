@@ -1,0 +1,7 @@
+scene,variant,config,data_dir,result_dir,extra_args
+garden,default_vanilla,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_vanilla,
+garden,default_full_beta,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_full_beta,--use-conf-scores --confidence-mode beta --lambda-sparsity 0.01 --beta-ent 0.002 --rank-weight 1.0
+garden,default_no_sparsity,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_no_sparsity,--use-conf-scores --confidence-mode beta --lambda-sparsity 0.0 --beta-ent 0.002 --rank-weight 1.0
+garden,default_no_entropy,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_no_entropy,--use-conf-scores --confidence-mode beta --lambda-sparsity 0.01 --beta-ent 0.0 --rank-weight 1.0
+garden,default_no_ranking,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_no_ranking,--use-conf-scores --confidence-mode beta --lambda-sparsity 0.01 --beta-ent 0.002 --rank-weight 0.0
+garden,default_scalar_conf,default,/scratch/amirrz/datasets/mipnerf360/garden,/scratch/amirrz/results/cs_resubmit/garden/default_scalar_conf,--use-conf-scores --confidence-mode scalar --lambda-sparsity 0.01 --beta-ent 0.0 --rank-weight 1.0

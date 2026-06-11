@@ -57,10 +57,12 @@ You can also specify the following arguments:
 ```bash
 --rank_interval {X}
 --rank_pairs {Y}
+--rank_weight {W}
+--rank_margin {M}
 --beta_ent {B}
 --lambda_sparsity {L}
 ```
-Where `rank-interval` is how frequently (in terms of epochs) should we do the __saliency-based ranking loss__. Also, `--rank-pairs` is for "how many splats should we sample for computing saliency-based ranking loss". `--beta-ent` stands for the multiplier of _Entropy loss_ and `--lambda-sparsity` stands for the multiplier of _Sparsity loss_.
+Where `rank-interval` is how frequently (in terms of epochs) should we do the __saliency-based ranking loss__. Also, `--rank-pairs` is for "how many splats should we sample for computing saliency-based ranking loss", `--rank-weight` is the ranking-loss multiplier, and `--rank-margin` is the confidence separation margin in the hinge ranking loss. `--beta-ent` stands for the multiplier of _Entropy loss_ and `--lambda-sparsity` stands for the multiplier of _Sparsity loss_.
 
 After the training ends, you can see the logs and results in your specified path. Also, there will be side-by-side renders of the images in `renders/` and a video rendered from the whole scene in `videos/`. Also your saved checkpoints will be stored in `ckpts/`. In the meanwhile, while the model is training, you can see the custom viewer for the gaussian splatting scene automatically openning in your browser.
 

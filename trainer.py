@@ -183,7 +183,7 @@ class Config:
     rank_interval: int = 25
     rank_pairs: int = 2048
     rank_weight: float = 1.0
-    rank_margin: float = 1.0
+    rank_margin: float = 0.10
     rank_start_step: int = 1000
     
     beta_ent: float = 2e-3
